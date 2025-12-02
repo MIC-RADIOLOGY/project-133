@@ -39,11 +39,15 @@ if st.button("Generate Quotation"):
 
     try:
         # -------------------------
-        # LOAD TEMPLATE (headers on row 4 → header=3)
+        # LOAD TEMPLATE AND FORCE COLUMN NAMES
         # -------------------------
-        template_df = pd.read_excel(template_file, header=3)
+        # Define the expected columns in your template
+        template_columns = ["Tariff", "Description", "Qty", "Unit", "Total", "Notes", "Other"]
+
+        # Skip the first 3 rows so row 4 becomes the first row of data
+        template_df = pd.read_excel(template_file, header=None, skiprows=3, names=template_columns)
         template_df.columns = template_df.columns.str.strip().str.title()
-        st.write("Template Columns Found:", template_df.columns.tolist())
+        st.write("Template Columns Used:", template_df.columns.tolist())
 
         if "Tariff" not in template_df.columns:
             st.error("Quotation template must have a column named 'Tariff'.")
