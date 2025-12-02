@@ -39,13 +39,13 @@ if st.button("Generate Quotation"):
 
     try:
         # -------------------------
-        # LOAD TEMPLATE
+        # LOAD TEMPLATE (HEADERS ON ROW 4 → header=3)
         # -------------------------
-        template_df = pd.read_excel(template_file)
-        # Normalize column names
-        template_df.columns = template_df.columns.str.strip().str.title()  # remove spaces and standardize
+        template_df = pd.read_excel(template_file, header=3)
+        template_df.columns = template_df.columns.str.strip().str.title()
+        st.write("Template Columns Found:", template_df.columns.tolist())
+
         if "Tariff" not in template_df.columns:
-            st.write("Template Columns Found:", template_df.columns.tolist())
             st.error("Quotation template must have a column named 'Tariff'.")
             st.stop()
 
@@ -57,7 +57,7 @@ if st.button("Generate Quotation"):
         st.info(f"Available Tabs: {available_tabs}")
 
         # Map scan category to tab automatically
-        scan_category = scan_type.split()[0].upper()  # first word like XRAY, CT, MRI
+        scan_category = scan_type.split()[0].upper()  # e.g., XRAY, CT, MRI
         tab_map = {
             "XRAY": [tab for tab in available_tabs if "XRAY" in tab.upper()],
             "CT": [tab for tab in available_tabs if "CT" in tab.upper()],
@@ -70,7 +70,7 @@ if st.button("Generate Quotation"):
 
         sheet_name = matching_tabs[0]  # pick first matching tab
         charge_df = pd.read_excel(charge_sheet_file, sheet_name=sheet_name)
-        charge_df.columns = charge_df.columns.str.strip().str.title()  # clean names
+        charge_df.columns = charge_df.columns.str.strip().str.title()
 
         # -------------------------
         # VALIDATE CHARGE SHEET COLUMNS
@@ -104,7 +104,7 @@ if st.button("Generate Quotation"):
         # MATCH TARIFFS AND ASSIGN PRICES
         # -------------------------
         output_df = template_df.copy()
-        output_df["Price"] = None  # initialize
+        output_df["Price"] = None
 
         for idx, row in output_df.iterrows():
             tariff_code = row["Tariff"]
