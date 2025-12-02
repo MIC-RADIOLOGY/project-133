@@ -7,7 +7,7 @@ st.title("Radiology Quotation Auto-Generator")
 st.write("""
 Upload your quotation template and the charge sheet.
 Enter the patient details and scan type, and the app will automatically
-fill the quotation using the correct tab and tariffs.
+fill the quotation using the correct tab and CIMAS USD price column.
 """)
 
 # ---------------------------------------------------
@@ -21,9 +21,9 @@ charge_sheet_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"
 # ---------------------------------------------------
 patient_name = st.text_input("Patient Full Name")
 medical_aid = st.text_input("Medical Aid Number")
-scan_type = st.text_input("Scan Type (MUST match tab name, e.g. 'USS', 'XRAY', 'CT CHEST')")
+scan_type = st.text_input("Scan Type (Tab Name exactly e.g. 'XRAY RECIPES', 'CT SCAN RECIPES')")
 
-# If a charge sheet is uploaded, show its tabs
+# If charge sheet uploaded, list the available tabs
 if charge_sheet_file:
     try:
         xl = pd.ExcelFile(charge_sheet_file)
@@ -31,23 +31,22 @@ if charge_sheet_file:
     except:
         st.warning("Could not read sheet names.")
 
-
 # ---------------------------------------------------
 # PROCESS BUTTON
 # ---------------------------------------------------
 if st.button("Generate Quotation"):
 
-    # 1. Validate file uploads & fields
+    # Validate inputs
     if not template_file:
-        st.error("Please upload a quotation template file.")
+        st.error("Upload quotation template file first.")
         st.stop()
 
     if not charge_sheet_file:
-        st.error("Please upload a charge sheet file.")
+        st.error("Upload charge sheet file first.")
         st.stop()
 
     if scan_type.strip() == "":
-        st.error("Please enter the scan type (matching tab name).")
+        st.error("Enter scan type (must match a sheet/tab name).")
         st.stop()
 
     try:
@@ -57,7 +56,7 @@ if st.button("Generate Quotation"):
         template_df = pd.read_excel(template_file)
 
         # ---------------------------------------------------
-        # STEP 2: FIND CORRECT TAB (MATCH EVEN IF DIFFERENT)
+        # STEP 2: MATCH THE CORRECT TAB
         # ---------------------------------------------------
         xl = pd.ExcelFile(charge_sheet_file)
         normalized_target = scan_type.strip().lower()
@@ -71,25 +70,37 @@ if st.button("Generate Quotation"):
         if sheet_match is None:
             st.error(f"""
                 Could not find a matching tab for '{scan_type}'.
-                Available tabs are: {xl.sheet_names}
+                Available tabs: {xl.sheet_names}
             """)
             st.stop()
 
-        # Load matching tab
+        # Load the selected sheet
         charge_df = pd.read_excel(charge_sheet_file, sheet_name=sheet_match)
 
         # ---------------------------------------------------
-        # STEP 3: MATCH TARIFFS & FILL PRICES
+        # STEP 3: VALIDATE COLUMNS
+        # ---------------------------------------------------
+        if "Tariff" not in template_df.columns:
+            st.error("Quotation template must have a column named 'Tariff'.")
+            st.stop()
+
+        if "TARIFF" not in charge_df.columns and "Tariff" not in charge_df.columns:
+            st.error("Charge sheet must contain a 'TARIFF' column.")
+            st.stop()
+
+        # Fix charge sheet tariff column name
+        if "TARIFF" in charge_df.columns:
+            charge_df.rename(columns={"TARIFF": "Tariff"}, inplace=True)
+
+        # Check CIMAS USD
+        if "CIMAS USD" not in charge_df.columns:
+            st.error("Charge sheet must contain a column named 'CIMAS USD'.")
+            st.stop()
+
+        # ---------------------------------------------------
+        # STEP 4: MATCH TARIFF & ASSIGN PRICE
         # ---------------------------------------------------
         output_df = template_df.copy()
-
-        if "Tariff" not in output_df.columns:
-            st.error("Quotation template must have a 'Tariff' column.")
-            st.stop()
-
-        if "Tariff" not in charge_df.columns or "Price" not in charge_df.columns:
-            st.error("Charge sheet tab must have 'Tariff' and 'Price' columns.")
-            st.stop()
 
         for index, row in output_df.iterrows():
             tariff_code = row["Tariff"]
@@ -97,26 +108,27 @@ if st.button("Generate Quotation"):
             match = charge_df[charge_df["Tariff"] == tariff_code]
 
             if not match.empty:
-                output_df.loc[index, "Price"] = match["Price"].values[0]
+                price = match["CIMAS USD"].values[0]
+                output_df.loc[index, "Price"] = price
             else:
-                output_df.loc[index, "Price"] = None  # Tariff not found
+                output_df.loc[index, "Price"] = None
 
         # ---------------------------------------------------
-        # STEP 4: ADD PATIENT DETAILS
+        # STEP 5: ADD PATIENT DETAILS
         # ---------------------------------------------------
         output_df["PatientName"] = patient_name
         output_df["MedicalAid"] = medical_aid
 
         # ---------------------------------------------------
-        # STEP 5: GENERATE FINAL EXCEL
+        # STEP 6: EXPORT FINAL EXCEL
         # ---------------------------------------------------
         output_path = "Generated_Quotation.xlsx"
         output_df.to_excel(output_path, index=False)
 
         # ---------------------------------------------------
-        # STEP 6: DOWNLOAD BUTTON
+        # DOWNLOAD BUTTON
         # ---------------------------------------------------
-        st.success("Quotation successfully generated!")
+        st.success("Quotation generated successfully!")
 
         with open(output_path, "rb") as f:
             st.download_button(
