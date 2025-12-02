@@ -5,7 +5,7 @@ from io import BytesIO
 import difflib
 
 # ---------------------------
-# Flexible cell finder
+# Flexible cell finder, merged-cell safe
 # ---------------------------
 def find_cell_any(sheet, keywords):
     for row in sheet.iter_rows():
@@ -14,6 +14,10 @@ def find_cell_any(sheet, keywords):
                 text = str(cell.value).lower()
                 for word in keywords:
                     if word.lower() in text:
+                        # Check if cell is part of a merged range
+                        for merged in sheet.merged_cells.ranges:
+                            if cell.coordinate in merged:
+                                return merged.min_row, merged.min_col
                         return cell.row, cell.column
     return None
 
@@ -24,7 +28,7 @@ def get_tariff(scan_type, charge_file):
     charges = pd.read_excel(charge_file, sheet_name=None)
 
     for sheet_name, df in charges.items():
-        # EXAMINATION column
+        # Find EXAMINATION column
         exam_col = None
         for col in df.columns:
             if "examination" in col.lower():
@@ -69,7 +73,7 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
     scan_cell    = find_cell_any(sheet, ["scan", "exam", "procedure", "service", "investigation"])
     tariff_cell  = find_cell_any(sheet, ["examination", "service", "procedure", "item", "description"])
 
-    # Debug output to see what was found
+    # Debug output
     st.write("Found patient cell:", patient_cell)
     st.write("Found medical aid cell:", medaid_cell)
     st.write("Found scan cell:", scan_cell)
