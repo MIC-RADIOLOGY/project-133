@@ -14,12 +14,22 @@ def find_cell_any(sheet, keywords):
                 text = str(cell.value).lower()
                 for word in keywords:
                     if word.lower() in text:
-                        # Check if cell is part of a merged range
+                        # Return top-left if part of merged
                         for merged in sheet.merged_cells.ranges:
                             if cell.coordinate in merged:
                                 return merged.min_row, merged.min_col
                         return cell.row, cell.column
     return None
+
+# ---------------------------
+# Safe write to cell (merged-cell safe)
+# ---------------------------
+def safe_write(sheet, row, col, value):
+    for merged in sheet.merged_cells.ranges:
+        if sheet.cell(row, col).coordinate in merged:
+            row, col = merged.min_row, merged.min_col
+            break
+    sheet.cell(row, col, value)
 
 # ---------------------------
 # Get tariff from charge sheet
@@ -84,18 +94,18 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
         return None
 
     # Fill patient details
-    sheet.cell(patient_cell[0], patient_cell[1] + 1).value = patient
-    sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value  = str(medaid)
-    sheet.cell(scan_cell[0], scan_cell[1] + 1).value      = scan
+    safe_write(sheet, patient_cell[0], patient_cell[1] + 1, patient)
+    safe_write(sheet, medaid_cell[0], medaid_cell[1] + 1, str(medaid))
+    safe_write(sheet, scan_cell[0], scan_cell[1] + 1, scan)
 
     # Fill tariff table
     start_row = tariff_cell[0] + 1
     col = tariff_cell[1]
 
-    sheet.cell(start_row, col).value       = tariff_data["EXAMINATION"]
-    sheet.cell(start_row, col + 1).value   = tariff_data["TARIFF"]
-    sheet.cell(start_row, col + 2).value   = tariff_data["QTY"]
-    sheet.cell(start_row, col + 3).value   = tariff_data["AMOUNT"]
+    safe_write(sheet, start_row, col,       tariff_data["EXAMINATION"])
+    safe_write(sheet, start_row, col + 1,   tariff_data["TARIFF"])
+    safe_write(sheet, start_row, col + 2,   tariff_data["QTY"])
+    safe_write(sheet, start_row, col + 3,   tariff_data["AMOUNT"])
 
     output = BytesIO()
     wb.save(output)
