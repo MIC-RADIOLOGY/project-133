@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
+from io import BytesIO
 
-# -----------------------------------------------------
-# 1. FIND CELL BY KEYWORD (SEARCH THE TEMPLATE)
-# -----------------------------------------------------
+# ---------------------------------------------------------
+# FIND A CELL BY KEYWORD (EVEN IF THE CELL IS MERGED)
+# ---------------------------------------------------------
 def find_cell(sheet, keyword):
     keyword = keyword.lower()
     for row in sheet.iter_rows():
@@ -13,81 +14,96 @@ def find_cell(sheet, keyword):
                 return cell.row, cell.column
     return None
 
-# -----------------------------------------------------
-# 2. GET TARIFF FROM MULTIPLE SHEETS
-# -----------------------------------------------------
-def get_tariff(scan_type):
-    charges = pd.read_excel("charges.xlsx", sheet_name=None)
+
+# ---------------------------------------------------------
+# GET TARIFF FROM MULTIPLE SHEETS
+# ---------------------------------------------------------
+def get_tariff(scan_type, charge_file):
+    charges = pd.read_excel(charge_file, sheet_name=None)
 
     for sheet_name, df in charges.items():
         if "Scan_Name" not in df.columns:
             continue
-        
+
         match = df[df["Scan_Name"].str.lower() == scan_type.lower()]
         if not match.empty:
             return match.to_dict(orient="records")[0]
-    
-    return None  # not found
 
-# -----------------------------------------------------
-# 3. FILL TEMPLATE EXACTLY AS-IS
-# -----------------------------------------------------
-def fill_quotation_template(patient, medaid, scan, tariff_data):
-    wb = load_workbook("quotation_template.xlsx")
+    return None
+
+
+# ---------------------------------------------------------
+# FILL THE QUOTATION TEMPLATE EXACTLY AS-IS
+# ---------------------------------------------------------
+def fill_template(template_file, patient, medaid, scan, tariff_data):
+    # Load workbook from uploaded file
+    wb = load_workbook(template_file)
     sheet = wb.active
 
-    # Locate fields automatically
+    # Find key fields
     patient_cell = find_cell(sheet, "patient")
     medaid_cell = find_cell(sheet, "medical")
     scan_cell = find_cell(sheet, "scan")
-    tariff_header = find_cell(sheet, "tariff")  # header row
+    tariff_cell = find_cell(sheet, "tariff")
 
-    if not (patient_cell and medaid_cell and scan_cell and tariff_header):
-        st.error("Template structure missing required keywords.")
+    if not (patient_cell and medaid_cell and scan_cell and tariff_cell):
+        st.error("Template missing required headings.")
         return None
 
-    # Fill top fields
+    # Fill data next to detected fields
     sheet.cell(patient_cell[0], patient_cell[1] + 1).value = patient
-    sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value = medaid
+
+    # MEDICAL AID AS NUMBER OR TEXT
+    try:
+        medaid_num = int(medaid)
+        sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value = medaid_num
+    except:
+        sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value = medaid
+
     sheet.cell(scan_cell[0], scan_cell[1] + 1).value = scan
 
-    # Fill tariff table (starting below header)
-    start_row = tariff_header[0] + 1
-
-    col_tariff = tariff_header[1]
-    col_price = col_tariff + 1
+    # Insert tariff table
+    start_row = tariff_cell[0] + 1
+    tariff_col = tariff_cell[1]
 
     for i, (key, value) in enumerate(tariff_data.items()):
-        sheet.cell(start_row + i, col_tariff).value = key
-        sheet.cell(start_row + i, col_price).value = value
+        sheet.cell(start_row + i, tariff_col).value = key
+        sheet.cell(start_row + i, tariff_col + 1).value = value
 
-    # Save output file
-    output_file = "quotation_output.xlsx"
-    wb.save(output_file)
-    return output_file
+    # Save to memory
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
 
-# -----------------------------------------------------
-# 4. STREAMLIT USER INTERFACE
-# -----------------------------------------------------
-st.title("Radiology Quotation Generator (Excel)")
+
+# ---------------------------------------------------------
+# STREAMLIT UI
+# ---------------------------------------------------------
+st.title("AI Radiology Quotation Generator (Excel Auto-Template)")
+
+template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
+charge_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 
 patient = st.text_input("Patient Name")
 medaid = st.text_input("Medical Aid Number")
-scan = st.text_input("Type of Scan (must match charges sheet)")
+scan = st.text_input("Scan Type (exact name)")
 
 if st.button("Generate Quotation"):
-    if not (patient and medaid and scan):
-        st.error("Please fill all fields.")
+    if not template_file or not charge_file:
+        st.error("Upload both the quotation template and charge sheet.")
+    elif not (patient and medaid and scan):
+        st.error("Fill all patient fields.")
     else:
-        tariff_data = get_tariff(scan)
+        tariff_data = get_tariff(scan, charge_file)
         if not tariff_data:
             st.error("Scan type not found in charge sheet.")
         else:
-            output = fill_quotation_template(patient, medaid, scan, tariff_data)
+            output = fill_template(template_file, patient, medaid, scan, tariff_data)
             if output:
-                with open(output, "rb") as f:
-                    st.download_button(
-                        "Download Completed Quotation",
-                        f,
-                        file_name="quotation_output.xlsx"
-                    )
+                st.download_button(
+                    "Download Finished Quotation",
+                    output,
+                    file_name="quotation_output.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
