@@ -39,20 +39,9 @@ if st.button("Generate Quotation"):
 
     try:
         # -------------------------
-        # LOAD TEMPLATE AND DETECT HEADER ROW
+        # LOAD TEMPLATE (headers on row 4 → header=3)
         # -------------------------
-        preview = pd.read_excel(template_file, header=None)
-        header_row = None
-        for i in range(min(10, len(preview))):  # check first 10 rows
-            row_values = preview.iloc[i].astype(str).str.lower().tolist()
-            if "tariff" in row_values:
-                header_row = i
-                break
-        if header_row is None:
-            st.error("Could not detect header row containing 'Tariff'. Please check your template.")
-            st.stop()
-
-        template_df = pd.read_excel(template_file, header=header_row)
+        template_df = pd.read_excel(template_file, header=3)
         template_df.columns = template_df.columns.str.strip().str.title()
         st.write("Template Columns Found:", template_df.columns.tolist())
 
@@ -68,7 +57,7 @@ if st.button("Generate Quotation"):
         st.info(f"Available Tabs: {available_tabs}")
 
         # Map scan category to tab automatically
-        scan_category = scan_type.split()[0].upper()  # first word
+        scan_category = scan_type.split()[0].upper()  # e.g., XRAY, CT, MRI
         tab_map = {
             "XRAY": [tab for tab in available_tabs if "XRAY" in tab.upper()],
             "CT": [tab for tab in available_tabs if "CT" in tab.upper()],
