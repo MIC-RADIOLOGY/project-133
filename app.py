@@ -1,53 +1,51 @@
 import pandas as pd
-import sys
+import streamlit as st
 
-class MedicalTariff:
-    def __init__(self, excel_path):
-        # Load all sheets from the Excel file
-        self.data = pd.read_excel(excel_path, sheet_name=None)
-        # Clean each sheet
-        for sheet, df in self.data.items():
-            self.data[sheet] = self._clean_df(df)
+st.set_page_config(page_title="Medical Examination Tariff Calculator", layout="wide")
+st.title("Medical Examination Tariff Calculator 📊")
 
-    def _clean_df(self, df):
-        # Remove empty rows and columns
-        df = df.dropna(how='all').reset_index(drop=True)
-        df = df.loc[:, df.notna().any()]
-        # Clean column names by stripping spaces
-        df.columns = [str(col).strip() for col in df.columns]
-        # Try converting STANDARD, COMPREHENSIVE, CIMAS USD to numeric (if present)
-        for col in ['STANDARD', 'COMPREHENSIVE', 'CIMAS USD']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
+# Upload Excel file
+uploaded_file = st.file_uploader("Upload your Excel file (.xlsx)", type=["xlsx", "xls"])
+if uploaded_file is not None:
+    # Load Excel file with all sheets
+    xls = pd.ExcelFile(uploaded_file)
+    st.sidebar.subheader("Select Sheet")
+    sheet_name = st.sidebar.selectbox("Choose a sheet to view", xls.sheet_names)
+    
+    # Load the selected sheet
+    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+    st.subheader(f"Raw Data from sheet: {sheet_name}")
+    st.dataframe(df)
 
-    def list_sheets(self):
-        return list(self.data.keys())
+    # Clean column names
+    df.columns = df.columns.str.strip()
 
-    def get_sheet_data(self, sheet_name):
-        return self.data.get(sheet_name)
+    # Convert numeric columns
+    numeric_cols = ['TARIFF', 'QTY', 'STANDARD', 'COMPREHENSIVE', 'CIMAS USD']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    def get_total_per_exam(self, sheet_name):
-        df = self.get_sheet_data(sheet_name)
-        if df is None:
-            raise ValueError(f"Sheet '{sheet_name}' not found.")
-        required_cols = ['EXAMINATION', 'STANDARD', 'COMPREHENSIVE', 'CIMAS USD']
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            raise ValueError(f"Sheet '{sheet_name}' missing required columns: {missing}")
-        # Group by EXAMINATION and sum numeric columns
-        totals = df.groupby('EXAMINATION')[['STANDARD', 'COMPREHENSIVE', 'CIMAS USD']].sum(min_count=1)
-        return totals.reset_index()
+    # Calculate totals per EXAMINATION
+    if 'EXAMINATION' in df.columns:
+        st.subheader("Totals per Examination")
+        totals = df.groupby('EXAMINATION')[['STANDARD', 'COMPREHENSIVE', 'CIMAS USD']].sum()
+        st.dataframe(totals)
 
-    def find_tariff_by_code(self, code):
-        results = []
-        for sheet, df in self.data.items():
-            if 'TARIFF' in df.columns:
-                matches = df[df['TARIFF'].astype(str) == str(code)]
-                if not matches.empty:
-                    results.append((sheet, matches))
-        return results
+        st.subheader("Grand Totals")
+        grand_totals = totals.sum()
+        st.write(grand_totals)
 
-def print_help():
-    print("""
-Usage: python
+        # Download button
+        totals_csv = totals.to_csv().encode('utf-8')
+        st.download_button(
+            label="Download Totals as CSV",
+            data=totals_csv,
+            file_name=f"{sheet_name}_totals.csv",
+            mime="text/csv"
+        )
+
+    st.info("✅ Upload another sheet to continue analyzing.")
+
+st.markdown("---")
+st.markdown("Developed with ❤️ using Streamlit and Pandas")
