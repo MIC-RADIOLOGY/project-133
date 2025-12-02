@@ -1,158 +1,79 @@
-# app.py
 import streamlit as st
-from utils import (
-    load_tariff_sheets, find_sheet_for_scan, find_tariff_in_sheet,
-    fill_template_placeholders, fill_template_by_mapping, make_output_filename, load_mapping_file
-)
-from pathlib import Path
-import tempfile
 import pandas as pd
-import io
-import json
+import openpyxl
 
-st.set_page_config(page_title="Radiology Quotation Filler", layout="centered")
+st.title("Radiology Quotation Auto-Generator")
 
-st.title("Radiology Quotation Auto-Filler")
-st.markdown("Upload your charge sheet (Excel) and your quotation template, then enter details and generate a filled quotation.")
+st.write("""
+Upload your quotation template and the charge sheet.
+Enter the patient details and scan type, and the app will automatically
+fill the quotation using the correct tab and tariffs.
+""")
 
-# ------- Upload files -------
-charge_file = st.file_uploader("Upload charge sheet (Excel with tabs for USS/XRAY/CT...)", type=['xlsx','xls'], key="charge")
-template_file = st.file_uploader("Upload quotation template (Excel .xlsx). Use placeholders like {{PATIENT_NAME}} OR provide mapping.json", type=['xlsx','xls'], key="template")
+# ---------------------------------------------------
+# File Uploaders
+# ---------------------------------------------------
+template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
+charge_sheet_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 
-st.info("Two ways to fill template:\n\n1) **Placeholders**: put `{{PATIENT_NAME}}`, `{{TARIFF_DESC_1}}` etc. in your template cells.\n\n2) **Mapping**: upload a mapping.json file (see example).")
+# ---------------------------------------------------
+# Inputs
+# ---------------------------------------------------
+patient_name = st.text_input("Patient Full Name")
+medical_aid = st.text_input("Medical Aid Number")
+scan_type = st.text_input("Scan Type (Tab Name in Charge Sheet e.g 'USS', 'XRAY', 'CT')")
 
-mapping_file = st.file_uploader("Optional: mapping.json (for exact cell addresses)", type=['json'], key="mapping")
+# ---------------------------------------------------
+# Processing
+# ---------------------------------------------------
+if st.button("Generate Quotation"):
 
-if charge_file is None or template_file is None:
-    st.warning("Please upload both the charge sheet and the template to continue.")
-    st.stop()
-
-# Read tariff sheets to memory (temporary file because pandas/ExcelFile needs a path-like)
-with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-    tmp.write(charge_file.getbuffer())
-    tmp_path = tmp.name
-
-tariff_sheets = load_tariff_sheets(tmp_path)
-st.success(f"Loaded charge sheet with sheets: {', '.join(tariff_sheets.keys())}")
-
-# Basic inputs
-patient_name = st.text_input("Patient full name", "")
-medical_aid = st.text_input("Medical aid number", "")
-scan_type = st.text_input("Type of scan (e.g., 'USS Abdomen', 'X-Ray Chest')", "")
-code_or_lookup = st.text_input("Optional: tariff code or short description to help lookup (recommended)", "")
-
-if st.button("Find tariff"):
-    if not scan_type:
-        st.error("Please enter a scan type.")
+    if not template_file:
+        st.error("Please upload a quotation template Excel file.")
+    elif not charge_sheet_file:
+        st.error("Please upload a charge sheet Excel file.")
+    elif scan_type == "":
+        st.error("Please enter the scan type (this must match the tab name).")
     else:
-        sheet_key = find_sheet_for_scan(tariff_sheets, scan_type)
-        st.write(f"Selected sheet: **{sheet_key}**")
-        df = tariff_sheets[sheet_key]
-        found = find_tariff_in_sheet(df, scan_type, code_or_desc=code_or_lookup)
-        if found:
-            st.success("Tariff found:")
-            st.json(found)
-        else:
-            st.error("No tariff matched. Try using a better description or provide tariff code in the helper field.")
-            # show first rows for inspection
-            st.dataframe(df.head())
+        try:
+            # Load template (as normal dataframe)
+            template_df = pd.read_excel(template_file)
 
-# Allow multiple tariffs
-st.markdown("### Add scan items (multiple allowed)")
-items = []
-# Use a session state list to accumulate items
-if 'items' not in st.session_state:
-    st.session_state['items'] = []
+            # Load correct tab from charge sheet
+            charge_df = pd.read_excel(charge_sheet_file, sheet_name=scan_type)
 
-col1, col2, col3 = st.columns([5,3,3])
-with col1:
-    item_scan = st.text_input("Scan description to add", key="item_scan")
-with col2:
-    item_code = st.text_input("Optional tariff code", key="item_code")
-with col3:
-    add_item_btn = st.button("Add item")
+            # Assume template has a column "Tariff"
+            # And charge sheet has columns "Tariff" and "Price"
 
-if add_item_btn:
-    if not item_scan:
-        st.error("Enter a scan description to add.")
-    else:
-        sheet_key = find_sheet_for_scan(tariff_sheets, item_scan)
-        df = tariff_sheets.get(sheet_key)
-        found = None
-        if df is not None:
-            found = find_tariff_in_sheet(df, item_scan, code_or_desc=item_code)
-        if not found:
-            st.warning("No tariff matched automatically — adding with price 0.0. You can edit price later.")
-            found = {'TARIFF_CODE': item_code or '', 'DESCRIPTION': item_scan, 'PRICE': 0.0}
-        st.session_state['items'].append(found)
-        st.success("Item added to quote.")
+            output_df = template_df.copy()
 
-if st.session_state['items']:
-    st.markdown("#### Current items")
-    df_items = pd.DataFrame(st.session_state['items'])
-    # allow editing prices inline (streamlit doesn't support table editing natively; show and accept changes via inputs)
-    st.dataframe(df_items)
-    if st.button("Clear items"):
-        st.session_state['items'] = []
+            for index, row in output_df.iterrows():
+                tariff_code = row.get("Tariff")
 
-# Choose fill method
-st.markdown("### Template filling options")
-fill_method = st.radio("Choose template fill method", ("Placeholders (recommended)", "Cell mapping (mapping.json)"))
+                match = charge_df[charge_df["Tariff"] == tariff_code]
 
-# If mapping file provided, load it
-mapping = None
-if mapping_file is not None:
-    try:
-        mapping = json.loads(mapping_file.getvalue().decode('utf-8'))
-        st.write("Loaded mapping.json")
-    except Exception as e:
-        st.error(f"Failed to parse mapping.json: {e}")
-        mapping = None
+                if not match.empty:
+                    output_df.loc[index, "Price"] = match["Price"].values[0]
+                else:
+                    output_df.loc[index, "Price"] = None
 
-if fill_method == "Cell mapping (mapping.json)" and mapping is None:
-    st.info("Please upload mapping.json or switch to placeholder method.")
-    st.stop()
+            # Add patient info
+            output_df["PatientName"] = patient_name
+            output_df["MedicalAid"] = medical_aid
 
-# Generate quotation
-if st.button("Generate quotation"):
-    if not patient_name:
-        st.error("Please enter patient name.")
-        st.stop()
-    if not st.session_state['items']:
-        st.error("Please add at least one scan item.")
-        st.stop()
+            # Save output
+            output_path = "Generated_Quotation.xlsx"
+            output_df.to_excel(output_path, index=False)
 
-    # build replacements / values
-    # prepare ITEMS as TARIFF_CODE_1, TARIFF_DESC_1, TARIFF_PRICE_1 etc.
-    replacements = {}
-    total = 0.0
-    for i, it in enumerate(st.session_state['items'], start=1):
-        replacements[f"TARIFF_CODE_{i}"] = it.get('TARIFF_CODE','')
-        replacements[f"TARIFF_DESC_{i}"] = it.get('DESCRIPTION','')
-        replacements[f"TARIFF_PRICE_{i}"] = f"{it.get('PRICE',0.0):.2f}"
-        total += float(it.get('PRICE', 0.0))
-    replacements['TOTAL'] = f"{total:.2f}"
-    replacements['PATIENT_NAME'] = patient_name
-    replacements['MEDICAL_AID'] = medical_aid
-    replacements['DATE'] = pd.Timestamp.now().strftime("%Y-%m-%d")
+            st.success("Quotation successfully generated!")
 
-    # save uploaded template to temp file
-    import tempfile
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as ttmp:
-        ttmp.write(template_file.getbuffer())
-        tmp_template_path = ttmp.name
+            with open(output_path, "rb") as f:
+                st.download_button(
+                    label="Download Final Quotation",
+                    data=f,
+                    file_name="Quotation.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
-    out_name = make_output_filename(patient=patient_name)
-    out_path = Path(tempfile.gettempdir()) / out_name
-
-    if fill_method == "Placeholders (recommended)":
-        fill_template_placeholders(tmp_template_path, out_path, replacements)
-    else:
-        # mapping expects dict field -> cell address
-        fill_template_by_mapping(tmp_template_path, out_path, mapping, replacements)
-
-    # present file for download
-    with open(out_path, 'rb') as fh:
-        data = fh.read()
-    st.success("Quotation generated.")
-    st.download_button("Download quotation (xlsx)", data, file_name=out_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
