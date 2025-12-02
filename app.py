@@ -4,7 +4,9 @@ from openpyxl import load_workbook
 from io import BytesIO
 import difflib
 
-# Flexible find cell that accepts multiple keywords
+# ---------------------------
+# Flexible cell finder
+# ---------------------------
 def find_cell_any(sheet, keywords):
     for row in sheet.iter_rows():
         for cell in row:
@@ -15,12 +17,14 @@ def find_cell_any(sheet, keywords):
                         return cell.row, cell.column
     return None
 
-# Get tariff from charge sheet with your exact columns & fuzzy matching
+# ---------------------------
+# Get tariff from charge sheet
+# ---------------------------
 def get_tariff(scan_type, charge_file):
     charges = pd.read_excel(charge_file, sheet_name=None)
 
     for sheet_name, df in charges.items():
-        # Find EXAMINATION column
+        # EXAMINATION column
         exam_col = None
         for col in df.columns:
             if "examination" in col.lower():
@@ -29,10 +33,7 @@ def get_tariff(scan_type, charge_file):
         if not exam_col:
             continue
 
-        # Price is last column
-        price_col = df.columns[-1]
-
-        # Try find tariff & qty columns if present
+        price_col = df.columns[-1]  # last column is always amount
         tariff_col = None
         qty_col = None
         for col in df.columns:
@@ -55,21 +56,30 @@ def get_tariff(scan_type, charge_file):
             }
     return None
 
-# Fill template exactly as is using flexible headings
+# ---------------------------
+# Fill template
+# ---------------------------
 def fill_template(template_file, patient, medaid, scan, tariff_data):
     wb = load_workbook(template_file)
     sheet = wb.active
 
+    # Flexible keywords
     patient_cell = find_cell_any(sheet, ["patient", "name", "client"])
     medaid_cell  = find_cell_any(sheet, ["medical", "member", "aid", "scheme"])
     scan_cell    = find_cell_any(sheet, ["scan", "exam", "procedure", "service", "investigation"])
     tariff_cell  = find_cell_any(sheet, ["examination", "service", "procedure", "item", "description"])
 
+    # Debug output to see what was found
+    st.write("Found patient cell:", patient_cell)
+    st.write("Found medical aid cell:", medaid_cell)
+    st.write("Found scan cell:", scan_cell)
+    st.write("Found tariff cell:", tariff_cell)
+
     if not (patient_cell and medaid_cell and scan_cell and tariff_cell):
         st.error("Template missing required headings. Make sure it contains patient, medical, scan, and examination/service headers.")
         return None
 
-    # Fill patient info
+    # Fill patient details
     sheet.cell(patient_cell[0], patient_cell[1] + 1).value = patient
     sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value  = str(medaid)
     sheet.cell(scan_cell[0], scan_cell[1] + 1).value      = scan
@@ -88,7 +98,9 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
     output.seek(0)
     return output
 
+# ---------------------------
 # Streamlit UI
+# ---------------------------
 st.title("AI Radiology Quotation Generator (Excel)")
 
 template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
