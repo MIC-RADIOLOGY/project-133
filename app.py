@@ -25,7 +25,7 @@ def get_tariff(scan_type, charge_file):
 
     for sheet_name, df in charges.items():
 
-        # FIX: detect the scan column automatically
+        # Detect possible scan column
         possible_columns = ["scan", "scan_name", "service", "description", "procedure", "exam", "item"]
 
         scan_col = None
@@ -35,20 +35,19 @@ def get_tariff(scan_type, charge_file):
                 break
 
         if not scan_col:
-            continue  # sheet has no valid scan column → skip
+            continue
 
-        # FIX: fuzzy match instead of exact match
+        # Fuzzy match
         df["__lower"] = df[scan_col].astype(str).str.lower()
         user_lower = scan_type.lower()
 
-        # find closest match
         matches = difflib.get_close_matches(user_lower, df["__lower"], n=1, cutoff=0.4)
+
         if matches:
             match = df[df["__lower"] == matches[0]].iloc[0]
             return match.to_dict()
 
     return None
-
 
 
 # ---------------------------------------------------------
@@ -67,15 +66,12 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
         st.error("Template missing required headings.")
         return None
 
-    # --- FIX: Always write medical aid number as TEXT ---
-    medaid_text = str(medaid)
-
-    # Fill fields
+    # Fill the fields
     sheet.cell(patient_cell[0], patient_cell[1] + 1).value = patient
-    sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value = medaid_text
+    sheet.cell(medaid_cell[0], medaid_cell[1] + 1).value = str(medaid)  # always text
     sheet.cell(scan_cell[0], scan_cell[1] + 1).value = scan
 
-    # Tariff table
+    # Fill tariffs
     start_row = tariff_cell[0] + 1
     col_tariff = tariff_cell[1]
 
@@ -84,12 +80,11 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
             sheet.cell(start_row + i, col_tariff).value = key
             sheet.cell(start_row + i, col_tariff + 1).value = value
 
-    # Save output
+    # Output as a downloadable Excel file
     output = BytesIO()
     wb.save(output)
     output.seek(0)
     return output
-
 
 
 # ---------------------------------------------------------
@@ -98,4 +93,28 @@ def fill_template(template_file, patient, medaid, scan, tariff_data):
 st.title("AI Radiology Quotation Generator (Excel Version)")
 
 template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
-charge_file = st.fi_
+charge_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
+
+patient = st.text_input("Patient Name")
+medaid = st.text_input("Medical Aid Number")
+scan = st.text_input("Scan Type (as written in charge sheet)")
+
+if st.button("Generate Quotation"):
+    if not template_file or not charge_file:
+        st.error("Please upload both the template and the charge sheet.")
+    elif not (patient and medaid and scan):
+        st.error("Please fill all fields.")
+    else:
+        tariff_data = get_tariff(scan, charge_file)
+        if not tariff_data:
+            st.error("❌ Scan type not found — try typing part of the name only.")
+        else:
+            output = fill_template(template_file, patient, medaid, scan, tariff_data)
+            if output:
+                st.success("Quotation Ready!")
+                st.download_button(
+                    "Download Final Quotation",
+                    output,
+                    file_name="quotation_output.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
