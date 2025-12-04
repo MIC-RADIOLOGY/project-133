@@ -4,20 +4,21 @@ import pandas as pd
 from io import BytesIO
 
 # ----------------------------------------
-# DEFAULT FILE LOCATIONS
+# DEFAULT FILE LOCATIONS (for fallback)
 # ----------------------------------------
 DATA_FOLDER = "data"
 DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
 DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
 
 # ----------------------------------------
-# LOAD EXCEL FUNCTION
+# LOAD FILES
 # ----------------------------------------
 def load_excel(path, label):
     """Load Excel or show a friendly error."""
     if not os.path.exists(path):
-        st.warning(f"❌ {label} not found at **{path}**.")
+        st.error(f"❌ {label} not found. Make sure **{path}** exists in the repo.")
         return None
+
     try:
         return pd.read_excel(path)
     except Exception as e:
@@ -29,17 +30,17 @@ def load_excel(path, label):
 # ----------------------------------------
 st.set_page_config(page_title="Quotation Generator", layout="wide")
 st.title("📄 Automated Quotation Generator")
-st.write("Upload files manually or use default charge sheet and template from `/data` folder.")
+st.write("Upload your files manually or use default charge sheet and template from `/data` folder.")
 
 # ----------------------------------------
-# FILE UPLOAD SECTION
+# FILE UPLOAD (manual)
 # ----------------------------------------
 st.subheader("📂 Upload Files (Optional)")
 
 uploaded_charge_sheet = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 
-# Load files: use uploaded if available, otherwise defaults
+# Load files: uploaded takes priority, fallback to defaults
 if uploaded_charge_sheet:
     try:
         charge_sheet = pd.read_excel(uploaded_charge_sheet)
@@ -80,14 +81,14 @@ if scan_name:
         st.success(f"Found **{len(matches)}** matching scan(s).")
         st.dataframe(matches)
 
-        # Select one row to use for quotation
+        # Select one to use for quotation
         selected_index = st.selectbox("Choose scan", matches.index)
 
         if selected_index is not None:
             selected_row = matches.loc[selected_index]
 
             # ----------------------------------------
-            # GENERATE QUOTATION
+            # Insert into template
             # ----------------------------------------
             st.subheader("📄 Generated Quotation")
 
