@@ -105,6 +105,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
 
 st.title("📄 Medical Quotation Generator (Excel Template Auto-Detection)")
 
+# File uploads
 charge_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 
@@ -117,16 +118,21 @@ if charge_file and template_file:
             st.subheader("Patient Information")
             col1, col2 = st.columns(2)
 
+            # Use session_state to preserve input values across reruns
             with col1:
-                patient = st.text_input("Patient Name")
-                member = st.text_input("Medical Aid Number")
+                st.text_input("Patient Name", key="patient_input")
+                st.text_input("Medical Aid Number", key="member_input")
 
             with col2:
-                provider = st.text_input("Medical Aid Provider", value="CIMAS")
+                st.text_input("Medical Aid Provider", value="CIMAS", key="provider_input")
+
+            patient = st.session_state.patient_input
+            member = st.session_state.member_input
+            provider = st.session_state.provider_input
 
             st.subheader("Select Scan")
             scan_list = df["EXAMINATION"].unique().tolist()
-            selected_scan = st.selectbox("Choose Scan", scan_list)
+            selected_scan = st.selectbox("Choose Scan", scan_list, key="scan_select")
 
             if selected_scan:
                 scan_row = df[df["EXAMINATION"] == selected_scan].iloc[0]
