@@ -41,7 +41,6 @@ def safe_float(x, default=0.0):
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
 
-    # Ensure at least 5 columns (A–E)
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -54,34 +53,28 @@ def load_charge_sheet(file) -> pd.DataFrame:
     for idx, r in df_raw.iterrows():
         exam = clean_text(r["A_EXAM"])
 
-        # skip empty
         if exam == "":
             continue
 
         exam_u = exam.upper()
 
-        # MAIN CATEGORY (full row only name)
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # IGNORE ROWS YOU DON'T WANT
         if exam_u in {"FF", "TOTAL", "CO-PAYMENT", "CO PAYMENT"}:
             continue
 
-        # SUBCATEGORY (Exam filled, but tariff & amount blank)
         tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
         if exam and tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
             continue
 
-        # If row is garbage key in A_EXAM, skip
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # --- SCAN ITEM ---
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
@@ -105,7 +98,6 @@ def write_safe(ws, r, c, value):
     try:
         cell.value = value
     except Exception:
-        # merged cell fallback: set top-left of merged range
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 top = mr.coord.split(":")[0]
@@ -136,7 +128,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill patient info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         write_safe(ws, r, c, patient)
@@ -147,32 +138,22 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         r, c = pos["provider_cell"]
         write_safe(ws, r, c, provider)
 
-    # Fill scans into table_start_row onward
     if "table_start_row" in pos:
         rowptr = pos["table_start_row"]
         desc_col = pos["desc_col"]
+
         for sr in scan_rows:
-            write_safe(ws, rowptr, desc_col, sr.get("SCAN"))
-            write_safe(ws, rowptr, desc_col + 1, sr.get("TARIFF"))
-            write_safe(ws, rowptr, desc_col + 2, sr.get("MODIFIER"))
-            write_safe(ws, rowptr, desc_col + 3, sr.get("QTY"))
-            write_safe(ws, rowptr, desc_col + 4, sr.get("AMOUNT"))
+            write_safe(ws, rowptr, desc_col, sr.get("SCAN"))           # DESCRIPTION
+            write_safe(ws, rowptr, desc_col + 1, sr.get("TARIFF"))     # TARRIF
+            write_safe(ws, rowptr, desc_col + 2, sr.get("MODIFIER"))   # MOD
+            write_safe(ws, rowptr, desc_col + 3, sr.get("QTY"))        # QTY
+            write_safe(ws, rowptr, desc_col + 4, sr.get("AMOUNT"))     # FEES (correct column now)
             rowptr += 1
 
         if "total_cell" in pos:
             total = sum([safe_float(s.get("AMOUNT"), 0.0) for s in scan_rows])
             r, c = pos["total_cell"]
             write_safe(ws, r, c, total)
-    else:
-        rowptr = 25
-        desc_col = 1
-        for sr in scan_rows:
-            write_safe(ws, rowptr, desc_col, sr.get("SCAN"))
-            write_safe(ws, rowptr, desc_col + 1, sr.get("TARIFF"))
-            write_safe(ws, rowptr, desc_col + 2, sr.get("MODIFIER"))
-            write_safe(ws, rowptr, desc_col + 3, sr.get("QTY"))
-            write_safe(ws, rowptr, desc_col + 4, sr.get("AMOUNT"))
-            rowptr += 1
 
     buf = io.BytesIO()
     wb.save(buf)
