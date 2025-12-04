@@ -29,39 +29,55 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
     patient_cell = member_cell = provider_cell = None
     scan_start_row = desc_col = tarif_col = modi_col = qty_col = amt_col = total_cell = None
 
+    # Flexible detection
     for row in ws.iter_rows():
         for cell in row:
             if cell.value:
                 val = str(cell.value).strip().upper()
-                if "FOR PATIENT" in val:
+
+                if "PATIENT" in val and patient_cell is None:
                     patient_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                if "MEMBER NUMBER" in val:
+                elif "MEMBER" in val and member_cell is None:
                     member_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                if "MEDICAL EXAMINATION" in val:
+                elif ("PROVIDER" in val or "EXAMINATION" in val) and provider_cell is None:
                     provider_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                if val == "DESCRIPTION":
+                elif "DESCRIPTION" in val and scan_start_row is None:
                     scan_start_row = cell.row + 1
                     desc_col = cell.column
                     tarif_col = cell.column + 1
                     modi_col = cell.column + 2
                     qty_col = cell.column + 3
                     amt_col = cell.column + 4
-                if val == "TOTAL":
+                elif "TOTAL" in val and total_cell is None:
                     total_cell = ws.cell(row=cell.row, column=cell.column + 6)
 
-    if not all([patient_cell, member_cell, provider_cell, scan_start_row, desc_col, tarif_col, modi_col, qty_col, amt_col, total_cell]):
-        st.error("Could not detect all required fields in the quotation template. Please check the template format.")
-        return None
+    # Safety checks
+    missing_fields = []
+    if not patient_cell: missing_fields.append("Patient Name")
+    if not member_cell: missing_fields.append("Member Number")
+    if not provider_cell: missing_fields.append("Provider")
+    if not scan_start_row: missing_fields.append("Scan Table")
+    if not total_cell: missing_fields.append("Total Cell")
 
-    patient_cell.value = patient
-    member_cell.value = member
-    provider_cell.value = provider
-    ws.cell(row=scan_start_row, column=desc_col, value=scan_row["EXAMINATION"])
-    ws.cell(row=scan_start_row, column=tarif_col, value=scan_row["TARRIF"])
-    ws.cell(row=scan_start_row, column=modi_col, value=scan_row["MODIFIER"])
-    ws.cell(row=scan_start_row, column=qty_col, value=int(scan_row["QUANTITY"]))
-    ws.cell(row=scan_start_row, column=amt_col, value=float(scan_row["AMOUNT"]))
-    total_cell.value = float(scan_row["AMOUNT"])
+    if missing_fields:
+        st.warning(f"Could not detect the following fields in template: {', '.join(missing_fields)}")
+    
+    # Write patient info if detected
+    if patient_cell: patient_cell.value = patient
+    if member_cell: member_cell.value = member
+    if provider_cell: provider_cell.value = provider
+
+    # Write scan row if table detected
+    if scan_start_row:
+        ws.cell(row=scan_start_row, column=desc_col, value=scan_row["EXAMINATION"])
+        ws.cell(row=scan_start_row, column=tarif_col, value=scan_row["TARRIF"])
+        ws.cell(row=scan_start_row, column=modi_col, value=scan_row["MODIFIER"])
+        ws.cell(row=scan_start_row, column=qty_col, value=int(scan_row["QUANTITY"]))
+        ws.cell(row=scan_start_row, column=amt_col, value=float(scan_row["AMOUNT"]))
+
+    # Write total if detected
+    if total_cell:
+        total_cell.value = float(scan_row["AMOUNT"])
 
     output = io.BytesIO()
     wb.save(output)
@@ -75,7 +91,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
 st.title("📄 Medical Quotation Generator")
 
 # -----------------------------
-# Persistent session state for files
+# Session state for files and data
 # -----------------------------
 if "charge_file" not in st.session_state:
     st.session_state.charge_file = None
@@ -92,9 +108,7 @@ uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=[
 if uploaded_template is not None:
     st.session_state.template_file = uploaded_template
 
-# -----------------------------
 # Persistent patient info
-# -----------------------------
 for key, default in [("patient_input",""), ("member_input",""), ("provider_input","CIMAS")]:
     if key not in st.session_state:
         st.session_state[key] = default
