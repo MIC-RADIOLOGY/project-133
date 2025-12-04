@@ -18,7 +18,6 @@ GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 def clean_text(x) -> str:
     if pd.isna(x):
         return ""
-    # remove non-breaking spaces and strip
     return str(x).replace("\xa0", " ").strip()
 
 def u(x) -> str:
@@ -41,7 +40,6 @@ def safe_float(x, default=0.0):
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
-
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -55,15 +53,14 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = str(r["A_EXAM"]).replace("\xa0", " ").strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
-        # MAIN CATEGORY
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # Skip any row that has no DESCRIPTION and is not FF
+        # Skip empty rows unless FF
         if exam == "" and exam_u != "FF":
-            continue  # <-- prevents phantom 76282
+            continue
 
         # Handle FF explicitly
         if exam_u == "FF":
@@ -85,7 +82,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Subcategory row (tariff & amount blank)
+        # Subcategory row
         tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
         if tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
@@ -134,7 +131,6 @@ def find_template_positions(ws):
                     pos["member_cell"] = (cell.row, cell.column + 1)
                 if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
                     pos["provider_cell"] = (cell.row, cell.column + 1)
-
                 headers = ["DESCRIPTION","TARRIF","MOD","QTY","FEES","AMOUNT"]
                 if any(h in t for h in headers) and "cols" not in pos:
                     pos["cols"] = {}
@@ -162,7 +158,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     if "table_start_row" in pos and "cols" in pos:
         rowptr = pos["table_start_row"]
         cols = pos["cols"]
-
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
@@ -176,18 +171,15 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     buf.seek(0)
     return buf
 
-# ---------- Preload charge sheet ----------
+# ---------- Preload defaults ----------
 DATA_FOLDER = "data"
 os.makedirs(DATA_FOLDER, exist_ok=True)
 DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
 DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
 
-if "parsed_df" not in st.session_state:
-    if os.path.exists(DEFAULT_CHARGE_SHEET):
-        st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
-        st.success("Charge sheet loaded from app storage.")
-    else:
-        st.warning("Default charge sheet not found. Please upload.")
+if "parsed_df" not in st.session_state and os.path.exists(DEFAULT_CHARGE_SHEET):
+    st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
+    st.success("Default charge sheet loaded from app storage.")
 
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
@@ -196,31 +188,17 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Show template upload only if template does NOT exist
-if not os.path.exists(DEFAULT_TEMPLATE):
-    uploaded_template = st.file_uploader("Upload Quotation Template (Optional)", type=["xlsx"])
-    if uploaded_template is not None:
-        template_bytes = uploaded_template.read()
-        with open(DEFAULT_TEMPLATE, "wb") as f:
-            f.write(template_bytes)
-        st.success(f"Template uploaded and saved to {DEFAULT_TEMPLATE}")
-
 default_template_path = DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else None
-if default_template_path is None:
-    st.warning("No quotation template available. Upload to enable download.")
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
-
     if debug_mode:
-        st.write("Parsed DataFrame columns:", df.columns.tolist())
         st.dataframe(df.head(50))
 
     cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
     if not cats:
         subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())] if "SUBCATEGORY" in df.columns else []
         if subs:
-            st.warning("No main categories detected; choose a Subcategory instead.")
             subsel = st.selectbox("Select Subcategory", subs)
             scans_for_sub = df[df["SUBCATEGORY"] == subsel]
         else:
@@ -228,7 +206,6 @@ if "parsed_df" in st.session_state:
     else:
         main_sel = st.selectbox("Select Main Category", ["-- choose --"] + cats)
         if main_sel == "-- choose --":
-            st.info("Please select a main category.")
             st.stop()
         subs = [s for s in sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())]
         if not subs:
@@ -244,9 +221,8 @@ if "parsed_df" in st.session_state:
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
         )
-
         sel_indices = st.multiselect(
-            "Select scans to add to quotation (you can select multiple)",
+            "Select scans to add to quotation",
             options=list(range(len(scans_for_sub))),
             format_func=lambda i: scans_for_sub.at[i, "label"]
         )
@@ -267,8 +243,6 @@ if "parsed_df" in st.session_state:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
-                st.info("No template available. Upload to enable download.")
-        else:
-            st.info("No scans selected yet. Choose scans to add to the quotation.")
+                st.info("No template available. Place template.xlsx in data/ folder.")
 else:
-    st.info("No charge sheet loaded. Please upload or place default file in app storage.")
+    st.info("No charge sheet loaded. Place charge_sheet.xlsx in data/ folder.")
