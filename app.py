@@ -52,8 +52,8 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = clean_text(r["A_EXAM"])
         exam_u = exam.upper()
 
-        # Skip empty rows
-        if exam == "":
+        # Skip rows where DESCRIPTION is empty and not FF
+        if exam == "" and exam_u != "FF":
             continue
 
         # MAIN CATEGORY
@@ -82,10 +82,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Skip numeric-only DESCRIPTION rows (phantom)
-        if exam.replace(".", "").isdigit():
-            continue
-
         # Subcategory row (tariff & amount blank)
         tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
@@ -93,7 +89,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Valid scan row
+        # Only rows with DESCRIPTION text reach this point
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
@@ -234,24 +230,4 @@ if "parsed_df" in st.session_state:
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
         )
-        sel_indices = st.multiselect("Select scans to add to quotation (you can select multiple)",
-                                     options=list(range(len(scans_for_sub))),
-                                     format_func=lambda i: scans_for_sub.at[i, "label"])
-        selected_rows = [scans_for_sub.iloc[i].to_dict() for i in sel_indices]
-        if selected_rows:
-            st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
-            total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
-            st.markdown(f"**Total Amount:** {total_amt:.2f}")
-
-            if uploaded_template:
-                if st.button("Generate Quotation and Download Excel"):
-                    out = fill_excel_template(uploaded_template, patient, member, provider, selected_rows)
-                    st.download_button("Download Quotation", data=out,
-                                       file_name=f"quotation_{patient or 'patient'}.xlsx",
-                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            else:
-                st.info("Upload a quotation template to enable download.")
-        else:
-            st.info("No scans selected yet. Choose scans to add to the quotation.")
-else:
-    st.info("Upload a charge sheet to begin parsing.")
+        sel_indices = st.multiselect("Select scans to add to quotation (you_
