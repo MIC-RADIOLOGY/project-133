@@ -1,65 +1,41 @@
-import os
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
 # ----------------------------------------
-# DEFAULT FILE LOCATIONS (for fallback)
+# LOAD FILES (manual input only)
 # ----------------------------------------
-DATA_FOLDER = "data"
-DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
-DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
-
-# ----------------------------------------
-# LOAD FILES
-# ----------------------------------------
-def load_excel(path, label):
+def load_excel(uploaded_file, label):
     """Load Excel or show a friendly error."""
-    if not os.path.exists(path):
-        st.error(f"❌ {label} not found. Make sure **{path}** exists in the repo.")
+    if uploaded_file is None:
+        st.error(f"❌ {label} not uploaded. Please upload the file to continue.")
         return None
 
     try:
-        return pd.read_excel(path)
+        return pd.read_excel(uploaded_file)
     except Exception as e:
         st.error(f"❌ Failed to load {label}: {e}")
         return None
+
 
 # ----------------------------------------
 # STREAMLIT UI
 # ----------------------------------------
 st.set_page_config(page_title="Quotation Generator", layout="wide")
+
 st.title("📄 Automated Quotation Generator")
-st.write("Upload your files manually or use default charge sheet and template from `/data` folder.")
+st.write("Upload your **Charge Sheet** and **Quotation Template** to generate quotations.")
 
 # ----------------------------------------
-# FILE UPLOAD (manual)
+# FILE UPLOAD
 # ----------------------------------------
-st.subheader("📂 Upload Files (Optional)")
+st.subheader("📂 Upload Files")
+charge_sheet_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
+template_file = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 
-uploaded_charge_sheet = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
-
-# Load files: uploaded takes priority, fallback to defaults
-if uploaded_charge_sheet:
-    try:
-        charge_sheet = pd.read_excel(uploaded_charge_sheet)
-        st.success("✅ Uploaded Charge Sheet loaded successfully!")
-    except Exception as e:
-        st.error(f"❌ Failed to read uploaded Charge Sheet: {e}")
-        st.stop()
-else:
-    charge_sheet = load_excel(DEFAULT_CHARGE_SHEET, "Charge Sheet")
-
-if uploaded_template:
-    try:
-        template = pd.read_excel(uploaded_template)
-        st.success("✅ Uploaded Template loaded successfully!")
-    except Exception as e:
-        st.error(f"❌ Failed to read uploaded Template: {e}")
-        st.stop()
-else:
-    template = load_excel(DEFAULT_TEMPLATE, "Quotation Template")
+# Load files
+charge_sheet = load_excel(charge_sheet_file, "Charge Sheet")
+template = load_excel(template_file, "Quotation Template")
 
 if charge_sheet is None or template is None:
     st.stop()
@@ -82,10 +58,10 @@ if scan_name:
         st.dataframe(matches)
 
         # Select one to use for quotation
-        selected_index = st.selectbox("Choose scan", matches.index)
+        selected = st.selectbox("Choose scan", matches.index)
 
-        if selected_index is not None:
-            selected_row = matches.loc[selected_index]
+        if selected is not None:
+            selected_row = matches.loc[selected]
 
             # ----------------------------------------
             # Insert into template
@@ -105,6 +81,7 @@ if scan_name:
             # ----------------------------------------
             # DOWNLOAD BUTTON
             # ----------------------------------------
+            output_path = "generated_quotation.xlsx"
             output = BytesIO()
             filled.to_excel(output, index=False)
             output.seek(0)
