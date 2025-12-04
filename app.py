@@ -41,7 +41,6 @@ def safe_float(x, default=0.0):
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
 
-    # Ensure at least 5 columns
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -182,7 +181,6 @@ os.makedirs(DATA_FOLDER, exist_ok=True)
 DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
 DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
 
-# Load charge sheet
 if "parsed_df" not in st.session_state:
     if os.path.exists(DEFAULT_CHARGE_SHEET):
         st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
@@ -190,25 +188,25 @@ if "parsed_df" not in st.session_state:
     else:
         st.warning("Default charge sheet not found. Please upload.")
 
-# ---------- Template Upload ----------
-uploaded_template = st.file_uploader("Upload Quotation Template (Optional)", type=["xlsx"])
-if uploaded_template is not None:
-    template_bytes = uploaded_template.read()
-    with open(DEFAULT_TEMPLATE, "wb") as f:
-        f.write(template_bytes)
-    st.success(f"Template uploaded and saved to {DEFAULT_TEMPLATE}")
-
-default_template_path = DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else None
-if default_template_path is None:
-    st.warning("No quotation template available. Upload to enable download.")
-
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
-
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
+
+# Show template upload only if template does NOT exist
+if not os.path.exists(DEFAULT_TEMPLATE):
+    uploaded_template = st.file_uploader("Upload Quotation Template (Optional)", type=["xlsx"])
+    if uploaded_template is not None:
+        template_bytes = uploaded_template.read()
+        with open(DEFAULT_TEMPLATE, "wb") as f:
+            f.write(template_bytes)
+        st.success(f"Template uploaded and saved to {DEFAULT_TEMPLATE}")
+
+default_template_path = DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else None
+if default_template_path is None:
+    st.warning("No quotation template available. Upload to enable download.")
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
