@@ -6,29 +6,27 @@ import io
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # -----------------------------------
-# LOAD CHARGE SHEET
+# LOAD CHARGE SHEET (with skiprows fix)
 # -----------------------------------
 def load_charge_sheet(file):
-    df = pd.read_excel(file)
+    # Adjust skiprows as needed to skip title rows before actual headers
+    df = pd.read_excel(file, skiprows=2)  # <-- Try 2, 3, or 4 depending on your file
+    
     st.write("DEBUG: Columns detected in charge sheet:", df.columns.tolist())  # Debug print
     
-    df.columns = [c.strip().upper() for c in df.columns]
+    df.columns = [str(c).strip().upper() for c in df.columns]
     st.write("DEBUG: Columns after cleaning:", df.columns.tolist())  # Debug print
     
-    if "TARIFF" not in df.columns:
-        st.error("Column 'TARIFF' not found in charge sheet. Please check your Excel file.")
+    if "TARRIF" not in df.columns:
+        st.error("Column 'TARRIF' not found in charge sheet. Please check your Excel file.")
         return None
     
-    df = df[df["TARIFF"].notna()]
+    df = df[df["TARRIF"].notna()]
+    
+    # Convert columns safely
     df["EXAMINATION"] = df["EXAMINATION"].astype(str)
-    df["TARIFF"] = df["TARIFF"].astype(str)
+    df["TARRIF"] = df["TARRIF"].astype(str)
     df["MODIFIER"] = df["MODIFIER"].astype(str)
-    
-    # Make sure QUANTITY and AMOUNT columns exist and have correct types
-    if "QUANTITY" not in df.columns or "AMOUNT" not in df.columns:
-        st.error("Charge sheet must contain 'QUANTITY' and 'AMOUNT' columns.")
-        return None
-    
     df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors='coerce').fillna(0).astype(int)
     df["AMOUNT"] = pd.to_numeric(df["AMOUNT"], errors='coerce').fillna(0.0).astype(float)
     
@@ -75,7 +73,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
                     amt_col = cell.column + 4
 
                 if val == "TOTAL":
-                    # The total amount cell in your screenshot is approx. 6 columns to the right of "TOTAL"
                     total_cell = ws.cell(row=cell.row, column=cell.column + 6)
 
     # Validate detection
@@ -90,7 +87,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
 
     # --------- WRITE SCAN DATA INTO TABLE ---------
     ws.cell(row=scan_start_row, column=desc_col, value=scan_row["EXAMINATION"])
-    ws.cell(row=scan_start_row, column=tarif_col, value=scan_row["TARIFF"])
+    ws.cell(row=scan_start_row, column=tarif_col, value=scan_row["TARRIF"])
     ws.cell(row=scan_start_row, column=modi_col, value=scan_row["MODIFIER"])
     ws.cell(row=scan_start_row, column=qty_col, value=int(scan_row["QUANTITY"]))
     ws.cell(row=scan_start_row, column=amt_col, value=float(scan_row["AMOUNT"]))
@@ -138,7 +135,7 @@ if charge_file and template_file:
                 scan_row = df[df["EXAMINATION"] == selected_scan].iloc[0]
 
                 st.write("### Scan Details:")
-                st.write(f"**Tariff:** {scan_row['TARIFF']}")
+                st.write(f"**Tariff:** {scan_row['TARRIF']}")
                 st.write(f"**Modifier:** {scan_row['MODIFIER']}")
                 st.write(f"**Quantity:** {scan_row['QUANTITY']}")
                 st.write(f"**Amount:** {scan_row['AMOUNT']}")
