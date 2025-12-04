@@ -6,6 +6,20 @@ import io
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # -----------------------------------
+# HELPER FUNCTION: Safe assignment to possibly merged cells
+# -----------------------------------
+def set_cell_value_safe(cell, value):
+    """Assigns value to cell, even if it's part of a merged range."""
+    try:
+        cell.value = value
+    except AttributeError:
+        # It's a merged cell, assign to top-left cell of the merged range
+        for merged_range in cell.parent.merged_cells.ranges:
+            if cell.coordinate in merged_range:
+                cell.parent[merged_range.coord.split(":")[0]].value = value
+                return
+
+# -----------------------------------
 # LOAD CHARGE SHEET (no header in Excel)
 # -----------------------------------
 def load_charge_sheet(file):
@@ -29,12 +43,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
     patient_cell = member_cell = provider_cell = None
     scan_start_row = desc_col = tarif_col = modi_col = qty_col = amt_col = total_cell = None
 
-    # Flexible detection
+    # Flexible detection of fields
     for row in ws.iter_rows():
         for cell in row:
             if cell.value:
                 val = str(cell.value).strip().upper()
-
                 if "PATIENT" in val and patient_cell is None:
                     patient_cell = ws.cell(row=cell.row, column=cell.column + 1)
                 elif "MEMBER" in val and member_cell is None:
@@ -51,33 +64,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
                 elif "TOTAL" in val and total_cell is None:
                     total_cell = ws.cell(row=cell.row, column=cell.column + 6)
 
-    # Safety checks
+    # Warn user if fields missing
     missing_fields = []
     if not patient_cell: missing_fields.append("Patient Name")
     if not member_cell: missing_fields.append("Member Number")
     if not provider_cell: missing_fields.append("Provider")
     if not scan_start_row: missing_fields.append("Scan Table")
     if not total_cell: missing_fields.append("Total Cell")
-
     if missing_fields:
-        st.warning(f"Could not detect the following fields in template: {', '.join(missing_fields)}")
-    
-    # Write patient info if detected
-    if patient_cell: patient_cell.value = patient
-    if member_cell: member_cell.value = member
-    if provider_cell: provider_cell.value = provider
+        st.warning(f"Could not detect these fields in template: {', '.join(missing_fields)}")
 
-    # Write scan row if table detected
+    # Assign values safely
+    if patient_cell: set_cell_value_safe(patient_cell, patient)
+    if member_cell: set_cell_value_safe(member_cell, member)
+    if provider_cell: set_cell_value_safe(provider_cell, provider)
+
     if scan_start_row:
-        ws.cell(row=scan_start_row, column=desc_col, value=scan_row["EXAMINATION"])
-        ws.cell(row=scan_start_row, column=tarif_col, value=scan_row["TARRIF"])
-        ws.cell(row=scan_start_row, column=modi_col, value=scan_row["MODIFIER"])
-        ws.cell(row=scan_start_row, column=qty_col, value=int(scan_row["QUANTITY"]))
-        ws.cell(row=scan_start_row, column=amt_col, value=float(scan_row["AMOUNT"]))
+        set_cell_value_safe(ws.cell(row=scan_start_row, column=desc_col), scan_row["EXAMINATION"])
+        set_cell_value_safe(ws.cell(row=scan_start_row, column=tarif_col), scan_row["TARRIF"])
+        set_cell_value_safe(ws.cell(row=scan_start_row, column=modi_col), scan_row["MODIFIER"])
+        set_cell_value_safe(ws.cell(row=scan_start_row, column=qty_col), int(scan_row["QUANTITY"]))
+        set_cell_value_safe(ws.cell(row=scan_start_row, column=amt_col), float(scan_row["AMOUNT"]))
 
-    # Write total if detected
     if total_cell:
-        total_cell.value = float(scan_row["AMOUNT"])
+        set_cell_value_safe(total_cell, float(scan_row["AMOUNT"]))
 
     output = io.BytesIO()
     wb.save(output)
@@ -87,18 +97,14 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
 # -----------------------------------
 # STREAMLIT INTERFACE
 # -----------------------------------
-
 st.title("📄 Medical Quotation Generator")
 
 # -----------------------------
-# Session state for files and data
+# Persistent session state for files and data
 # -----------------------------
-if "charge_file" not in st.session_state:
-    st.session_state.charge_file = None
-if "template_file" not in st.session_state:
-    st.session_state.template_file = None
-if "df" not in st.session_state:
-    st.session_state.df = None
+if "charge_file" not in st.session_state: st.session_state.charge_file = None
+if "template_file" not in st.session_state: st.session_state.template_file = None
+if "df" not in st.session_state: st.session_state.df = None
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 if uploaded_charge is not None:
@@ -110,8 +116,7 @@ if uploaded_template is not None:
 
 # Persistent patient info
 for key, default in [("patient_input",""), ("member_input",""), ("provider_input","CIMAS")]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+    if key not in st.session_state: st.session_state[key] = default
 
 st.text_input("Patient Name", key="patient_input")
 st.text_input("Medical Aid Number", key="member_input")
