@@ -54,8 +54,8 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = clean_text(r["A_EXAM"])
         exam_u = exam.upper()
 
-        # --- FIX: Skip rows with empty DESCRIPTION except FF ---
-        if exam.strip() == "" and exam_u != "FF":
+        # Skip rows where DESCRIPTION is empty (except FF)
+        if (not exam or exam.strip() == "") and exam_u != "FF":
             continue
 
         # MAIN CATEGORY
@@ -64,7 +64,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = None
             continue
 
-        # Special case: FF (always include)
+        # Special case: FF
         if exam_u == "FF":
             row_tariff = safe_float(r["B_TARIFF"], default=None)
             row_amt = safe_float(r["E_AMOUNT"], default=0.0)
@@ -258,3 +258,5 @@ if "parsed_df" in st.session_state:
                 st.info("Upload a quotation template to enable download.")
         else:
             st.info("No scans selected yet. Choose scans to add to the quotation.")
+else:
+    st.info("Upload a charge sheet to begin parsing.")
