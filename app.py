@@ -12,7 +12,8 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN", "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
 }
-GARBAGE_KEYS = {"FF", "TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
+# Removed "FF" from garbage keys so films are picked up
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 # ---------- Helpers ----------
 def clean_text(x) -> str:
@@ -57,20 +58,40 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
         exam_u = exam.upper()
 
+        # MAIN CATEGORY
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
+        # Special case: FF = Film
+        if exam_u == "FF":
+            row_tariff = safe_float(r["B_TARIFF"], default=None)
+            row_amt = safe_float(r["E_AMOUNT"], default=0.0)
+            row_qty = safe_int(r["D_QTY"], default=1)
+            structured.append({
+                "CATEGORY": current_category,
+                "SUBCATEGORY": current_subcategory,
+                "SCAN": "FF",
+                "TARIFF": row_tariff,
+                "MODIFIER": "",
+                "QTY": row_qty,
+                "AMOUNT": row_amt
+            })
+            continue
+
+        # Skip other garbage keys
         if exam_u in GARBAGE_KEYS:
             continue
 
+        # Subcategory row (tariff & amount blank)
         tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
         if exam and tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
             continue
 
+        # Scan item
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
@@ -101,12 +122,6 @@ def write_safe(ws, r, c, value):
                 return
 
 def find_template_positions(ws):
-    """
-    Detect table headers and return exact column positions.
-    Returns dict with:
-      'patient_cell', 'member_cell', 'provider_cell', 
-      'table_start_row', 'cols' (mapping header -> column)
-    """
     pos = {}
     for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
@@ -119,7 +134,6 @@ def find_template_positions(ws):
                 if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
                     pos["provider_cell"] = (cell.row, cell.column + 1)
 
-                # Detect table header columns
                 headers = ["DESCRIPTION","TARRIF","MOD","QTY","FEES","AMOUNT"]
                 if any(h in t for h in headers) and "cols" not in pos:
                     pos["cols"] = {}
@@ -156,12 +170,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Total if exists
-        if "total_cell" in pos:
-            total = sum([safe_float(s.get("AMOUNT"), 0.0) for s in scan_rows])
-            r, c = pos["total_cell"]
-            write_safe(ws, r, c, total)
-
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -194,7 +202,6 @@ if "parsed_df" in st.session_state:
 
     if debug_mode:
         st.write("Parsed DataFrame columns:", df.columns.tolist())
-        st.write("First 50 parsed rows:")
         st.dataframe(df.head(50))
 
     cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
@@ -205,7 +212,6 @@ if "parsed_df" in st.session_state:
             subsel = st.selectbox("Select Subcategory", subs)
             scans_for_sub = df[df["SUBCATEGORY"] == subsel]
         else:
-            st.warning("No categories/subcategories detected; showing all scans.")
             scans_for_sub = df
     else:
         main_sel = st.selectbox("Select Main Category", ["-- choose --"] + cats)
@@ -214,7 +220,6 @@ if "parsed_df" in st.session_state:
             st.stop()
         subs = [s for s in sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())]
         if not subs:
-            st.warning("No subcategories found under this category; showing scans directly.")
             scans_for_sub = df[df["CATEGORY"] == main_sel]
         else:
             subsel = st.selectbox("Select Subcategory", subs)
@@ -232,9 +237,7 @@ if "parsed_df" in st.session_state:
                                      format_func=lambda i: scans_for_sub.at[i, "label"])
         selected_rows = [scans_for_sub.iloc[i].to_dict() for i in sel_indices]
         if selected_rows:
-            st.write("Selected scans:")
-            display_df = pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]]
-            st.dataframe(display_df)
+            st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
             st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
