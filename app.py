@@ -18,6 +18,7 @@ GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 def clean_text(x) -> str:
     if pd.isna(x):
         return ""
+    # remove non-breaking spaces and strip
     return str(x).replace("\xa0", " ").strip()
 
 def u(x) -> str:
@@ -51,7 +52,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
     current_subcategory: Optional[str] = None
 
     for _, r in df_raw.iterrows():
-        exam = str(r["A_EXAM"]).strip() if not pd.isna(r["A_EXAM"]) else ""
+        exam = str(r["A_EXAM"]).replace("\xa0", " ").strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
         # MAIN CATEGORY
@@ -59,6 +60,10 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_category = exam
             current_subcategory = None
             continue
+
+        # Skip any row that has no DESCRIPTION and is not FF
+        if exam == "" and exam_u != "FF":
+            continue  # <-- prevents phantom 76282
 
         # Handle FF explicitly
         if exam_u == "FF":
@@ -78,10 +83,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
         # Skip garbage keys
         if exam_u in GARBAGE_KEYS:
-            continue
-
-        # Skip rows with empty DESCRIPTION (prevents phantom 76282)
-        if exam == "":
             continue
 
         # Subcategory row (tariff & amount blank)
