@@ -1,97 +1,68 @@
 import streamlit as st
 import pandas as pd
-from fpdf import FPDF
+from docx import Document
 import io
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# -----------------------------
+# -----------------------------------
 # LOAD CHARGE SHEET
-# -----------------------------
+# -----------------------------------
 def load_charge_sheet(file):
     df = pd.read_excel(file)
 
-    # Clean columns if needed
-    df.columns = [str(c).strip().upper() for c in df.columns]
+    # Normalize column names
+    df.columns = [c.strip().upper() for c in df.columns]
 
-    # Only keep rows with tariff numbers (valid scan lines)
-    valid_rows = df[df["TARRIF"].notna()]
+    # Keep only valid scan rows
+    df = df[df["TARRIF"].notna()]
 
-    # Ensure proper types
-    valid_rows["EXAMINATION"] = valid_rows["EXAMINATION"].astype(str)
-    valid_rows["TARRIF"] = valid_rows["TARRIF"].astype(str)
-    valid_rows["MODIFIER"] = valid_rows["MODIFIER"].astype(str)
-    valid_rows["QUANTITY"] = valid_rows["QUANTITY"]
-    valid_rows["AMOUNT"] = valid_rows["AMOUNT"]
+    df["EXAMINATION"] = df["EXAMINATION"].astype(str)
+    df["TARRIF"] = df["TARRIF"].astype(str)
+    df["MODIFIER"] = df["MODIFIER"].astype(str)
 
-    return valid_rows
+    return df
 
+# -----------------------------------
+# FILL DOCX TEMPLATE
+# -----------------------------------
+def fill_template(template_file, replacements):
+    doc = Document(template_file)
 
-# -----------------------------
-# PDF GENERATOR
-# -----------------------------
-def generate_pdf(patient_name, med_number, provider, scan_name, scan_row):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    # Replace inside paragraphs
+    for p in doc.paragraphs:
+        for key, val in replacements.items():
+            if key in p.text:
+                p.text = p.text.replace(key, val)
 
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "MEDICAL QUOTATION", ln=True, align="C")
+    # Replace inside tables as well
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for key, val in replacements.items():
+                    if key in cell.text:
+                        cell.text = cell.text.replace(key, val)
 
-    pdf.ln(5)
-
-    pdf.set_font("Arial", size=12)
-
-    # Patient details
-    pdf.cell(0, 8, f"Patient Name: {patient_name}", ln=True)
-    pdf.cell(0, 8, f"Medical Aid Number: {med_number}", ln=True)
-    pdf.cell(0, 8, f"Provider: {provider}", ln=True)
-
-    pdf.ln(10)
-
-    # Quotation table header
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(80, 8, "Examination", border=1)
-    pdf.cell(30, 8, "Tariff", border=1, align="C")
-    pdf.cell(25, 8, "Modifier", border=1, align="C")
-    pdf.cell(25, 8, "Qty", border=1, align="C")
-    pdf.cell(30, 8, "Amount", border=1, align="R")
-    pdf.ln()
-
-    # Data row
-    pdf.set_font("Arial", size=12)
-    pdf.cell(80, 8, scan_name, border=1)
-    pdf.cell(30, 8, scan_row["TARRIF"], border=1, align="C")
-    pdf.cell(25, 8, scan_row["MODIFIER"], border=1, align="C")
-    pdf.cell(25, 8, str(scan_row["QUANTITY"]), border=1, align="C")
-    pdf.cell(30, 8, f"${scan_row['AMOUNT']}", border=1, align="R")
-
-    pdf.ln(15)
-
-    # Total
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, f"Total Amount: ${scan_row['AMOUNT']}", ln=True)
-
-    buffer = io.BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return buffer
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output
 
 
-# -----------------------------
-# UI LAYOUT
-# -----------------------------
-st.title("📄 Medical Quotation Generator")
-st.write("Upload your charge sheet & fill in patient information to create a quotation.")
+# ===================================
+# STREAMLIT APP USER INTERFACE
+# ===================================
+st.title("📄 Medical Quotation Generator (With Template Upload)")
 
-uploaded_file = st.file_uploader("Upload the Excel Charge Sheet", type=["xlsx"])
+charge_file = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
+template_file = st.file_uploader("Upload Quotation Template (DOCX)", type=["docx"])
 
-if uploaded_file:
-    df = load_charge_sheet(uploaded_file)
+if charge_file and template_file:
 
+    df = load_charge_sheet(charge_file)
     st.success("Charge sheet loaded successfully!")
 
-    st.subheader("Step 1: Enter Patient Details")
+    st.subheader("Patient Information")
     col1, col2 = st.columns(2)
 
     with col1:
@@ -101,9 +72,9 @@ if uploaded_file:
     with col2:
         provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-    st.subheader("Step 2: Select Scan")
-
+    st.subheader("Select Scan")
     scan_list = df["EXAMINATION"].unique().tolist()
+
     selected_scan = st.selectbox("Choose Scan", scan_list)
 
     if selected_scan:
@@ -113,25 +84,33 @@ if uploaded_file:
         st.write(f"**Tariff:** {scan_row['TARRIF']}")
         st.write(f"**Modifier:** {scan_row['MODIFIER']}")
         st.write(f"**Quantity:** {scan_row['QUANTITY']}")
-        st.write(f"**Amount:** ${scan_row['AMOUNT']}")
+        st.write(f"**Amount:** {scan_row['AMOUNT']}")
 
-        if st.button("Generate Quotation PDF"):
-            pdf_file = generate_pdf(
-                patient_name,
-                med_number,
-                provider,
-                selected_scan,
-                scan_row
-            )
+        if st.button("Generate Quotation"):
+
+            # Build replacement dictionary
+            replacements = {
+                "{{PATIENT_NAME}}": patient_name,
+                "{{MEDICAL_AID_NUMBER}}": med_number,
+                "{{PROVIDER}}": provider,
+                "{{SCAN_NAME}}": selected_scan,
+                "{{TARRIF}}": scan_row["TARRIF"],
+                "{{MODIFIER}}": scan_row["MODIFIER"],
+                "{{QUANTITY}}": str(scan_row["QUANTITY"]),
+                "{{AMOUNT}}": str(scan_row["AMOUNT"]),
+                "{{TOTAL}}": str(scan_row["AMOUNT"])
+            }
+
+            output_docx = fill_template(template_file, replacements)
 
             st.success("Quotation generated!")
 
             st.download_button(
-                label="Download PDF",
-                data=pdf_file,
-                file_name=f"quotation_{patient_name}.pdf",
-                mime="application/pdf"
+                "Download Quotation",
+                data=output_docx,
+                file_name=f"quotation_{patient_name}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
 
 else:
-    st.info("Upload your charge sheet to begin.")
+    st.info("Please upload both the charge sheet and the template file.")
