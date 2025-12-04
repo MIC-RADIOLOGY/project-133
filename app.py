@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
+import os
 from typing import Optional
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
@@ -55,7 +56,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = str(r["A_EXAM"]).strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
-        # -----------------------
         # Skip empty DESCRIPTION except FF
         if exam == "" and exam_u != "FF":
             continue
@@ -177,27 +177,31 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     buf.seek(0)
     return buf
 
+# ---------- Preload charge sheet & template ----------
+DEFAULT_CHARGE_SHEET = "data/charge_sheet.xlsx"
+DEFAULT_TEMPLATE = "data/template.xlsx"
+
+if "parsed_df" not in st.session_state:
+    if os.path.exists(DEFAULT_CHARGE_SHEET):
+        st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
+        st.success("Charge sheet loaded from app storage.")
+    else:
+        st.warning("Default charge sheet not found. Please upload.")
+
+if os.path.exists(DEFAULT_TEMPLATE):
+    default_template_path = DEFAULT_TEMPLATE
+else:
+    default_template_path = None
+    st.warning("Default quotation template not found. Please upload.")
+
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
-uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
-
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-
-if uploaded_charge:
-    if st.button("Load & Parse Charge Sheet"):
-        try:
-            parsed = load_charge_sheet(uploaded_charge)
-            st.session_state.parsed_df = parsed
-            st.success("Charge sheet parsed.")
-        except Exception as e:
-            st.error(f"Failed to parse charge sheet: {e}")
-            st.stop()
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
@@ -247,9 +251,9 @@ if "parsed_df" in st.session_state:
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
             st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
-            if uploaded_template:
+            if default_template_path:
                 if st.button("Generate Quotation and Download Excel"):
-                    out = fill_excel_template(uploaded_template, patient, member, provider, selected_rows)
+                    out = fill_excel_template(default_template_path, patient, member, provider, selected_rows)
                     st.download_button(
                         "Download Quotation",
                         data=out,
@@ -257,8 +261,8 @@ if "parsed_df" in st.session_state:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
-                st.info("Upload a quotation template to enable download.")
+                st.info("Default template not found. Upload to enable download.")
         else:
             st.info("No scans selected yet. Choose scans to add to the quotation.")
 else:
-    st.info("Upload a charge sheet to begin parsing.")
+    st.info("No charge sheet loaded. Please upload or place default file in app storage.")
