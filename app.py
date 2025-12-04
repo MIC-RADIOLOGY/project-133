@@ -52,7 +52,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
     current_subcategory: Optional[str] = None
 
     for _, r in df_raw.iterrows():
-        # convert DESCRIPTION to string and strip spaces
         exam = str(r["A_EXAM"]).strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
@@ -93,7 +92,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Scan row with proper DESCRIPTION
+        # Scan row
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
@@ -177,10 +176,13 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     buf.seek(0)
     return buf
 
-# ---------- Preload charge sheet & template ----------
-DEFAULT_CHARGE_SHEET = "data/charge_sheet.xlsx"
-DEFAULT_TEMPLATE = "data/template.xlsx"
+# ---------- Preload charge sheet ----------
+DATA_FOLDER = "data"
+os.makedirs(DATA_FOLDER, exist_ok=True)
+DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
+DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
 
+# Load charge sheet
 if "parsed_df" not in st.session_state:
     if os.path.exists(DEFAULT_CHARGE_SHEET):
         st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
@@ -188,17 +190,22 @@ if "parsed_df" not in st.session_state:
     else:
         st.warning("Default charge sheet not found. Please upload.")
 
-if os.path.exists(DEFAULT_TEMPLATE):
-    default_template_path = DEFAULT_TEMPLATE
-else:
-    default_template_path = None
-    st.warning("Default quotation template not found. Please upload.")
+# ---------- Template Upload ----------
+uploaded_template = st.file_uploader("Upload Quotation Template (Optional)", type=["xlsx"])
+if uploaded_template is not None:
+    template_bytes = uploaded_template.read()
+    with open(DEFAULT_TEMPLATE, "wb") as f:
+        f.write(template_bytes)
+    st.success(f"Template uploaded and saved to {DEFAULT_TEMPLATE}")
+
+default_template_path = DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else None
+if default_template_path is None:
+    st.warning("No quotation template available. Upload to enable download.")
 
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
-
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
@@ -261,7 +268,7 @@ if "parsed_df" in st.session_state:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
-                st.info("Default template not found. Upload to enable download.")
+                st.info("No template available. Upload to enable download.")
         else:
             st.info("No scans selected yet. Choose scans to add to the quotation.")
 else:
