@@ -3,12 +3,11 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
-import math
 from typing import Optional
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# ---------- Config / heuristics ----------
+# ---------- Config ----------
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN", "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
 }
@@ -40,21 +39,22 @@ def safe_float(x, default=0.0):
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
-
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
     df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
 
     structured = []
-    current_category = None
-    current_subcategory = None
+    current_category: Optional[str] = None
+    current_subcategory: Optional[str] = None
 
-    for idx, r in df_raw.iterrows():
+    for _, r in df_raw.iterrows():
         exam = clean_text(r["A_EXAM"])
+        exam_u = exam.upper()
+
+        # Skip empty rows
         if exam == "":
             continue
-        exam_u = exam.upper()
 
         # MAIN CATEGORY
         if exam_u in MAIN_CATEGORIES:
@@ -82,7 +82,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Skip numeric-only rows (phantom tariffs)
+        # Skip numeric-only DESCRIPTION rows (phantom)
         if exam.replace(".", "").isdigit():
             continue
 
@@ -93,7 +93,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Scan item
+        # Valid scan row
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
