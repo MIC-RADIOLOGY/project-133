@@ -6,21 +6,18 @@ import io
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # -----------------------------------
-# LOAD CHARGE SHEET (with skiprows fix)
+# LOAD CHARGE SHEET (no header in Excel)
 # -----------------------------------
 def load_charge_sheet(file):
-    # Adjust skiprows as needed to skip title rows before actual headers
-    df = pd.read_excel(file, skiprows=2)  # <-- Try 2, 3, or 4 depending on your file
+    # Read Excel without header
+    df = pd.read_excel(file, header=None)
     
-    st.write("DEBUG: Columns detected in charge sheet:", df.columns.tolist())  # Debug print
+    # Assign proper column names
+    df.columns = ["EXAMINATION", "TARRIF", "MODIFIER", "QUANTITY", "AMOUNT"]
     
-    df.columns = [str(c).strip().upper() for c in df.columns]
-    st.write("DEBUG: Columns after cleaning:", df.columns.tolist())  # Debug print
+    st.write("DEBUG: Columns after assigning:", df.columns.tolist())
     
-    if "TARRIF" not in df.columns:
-        st.error("Column 'TARRIF' not found in charge sheet. Please check your Excel file.")
-        return None
-    
+    # Drop rows where TARRIF is missing
     df = df[df["TARRIF"].notna()]
     
     # Convert columns safely
