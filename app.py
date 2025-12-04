@@ -9,7 +9,7 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 # HELPER FUNCTION: Safe assignment to possibly merged cells
 # -----------------------------------
 def set_cell_value_safe(cell, value):
-    """Assigns value to cell, even if it's part of a merged range."""
+    """Assign value to cell, even if it's part of a merged range."""
     try:
         cell.value = value
     except AttributeError:
@@ -20,18 +20,32 @@ def set_cell_value_safe(cell, value):
                 return
 
 # -----------------------------------
-# LOAD CHARGE SHEET (no header in Excel)
+# LOAD CHARGE SHEET WITH CATEGORIES
 # -----------------------------------
 def load_charge_sheet(file):
     df = pd.read_excel(file, header=None)
     df.columns = ["EXAMINATION", "TARRIF", "MODIFIER", "QUANTITY", "AMOUNT"]
+
+    # Detect categories
+    category = None
+    categories = []
+    for i, row in df.iterrows():
+        if pd.isna(row["TARRIF"]) or row["TARRIF"] == "":
+            # Main heading row
+            category = str(row["EXAMINATION"])
+            categories.append(category)
+            df.at[i, "CATEGORY"] = None  # headings themselves have no category
+        else:
+            df.at[i, "CATEGORY"] = category
+
+    # Keep only rows with tariffs
     df = df[df["TARRIF"].notna()]
     df["EXAMINATION"] = df["EXAMINATION"].astype(str)
     df["TARRIF"] = df["TARRIF"].astype(str)
     df["MODIFIER"] = df["MODIFIER"].astype(str)
     df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors='coerce').fillna(0).astype(int)
     df["AMOUNT"] = pd.to_numeric(df["AMOUNT"], errors='coerce').fillna(0.0).astype(float)
-    return df
+    return df, categories
 
 # -----------------------------------
 # FILL EXCEL TEMPLATE AUTOMATICALLY
@@ -99,12 +113,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
 # -----------------------------------
 st.title("📄 Medical Quotation Generator")
 
-# -----------------------------
-# Persistent session state for files and data
-# -----------------------------
-if "charge_file" not in st.session_state: st.session_state.charge_file = None
-if "template_file" not in st.session_state: st.session_state.template_file = None
-if "df" not in st.session_state: st.session_state.df = None
+# Persistent session state
+for key in ["charge_file", "template_file", "df", "categories", "patient_input", "member_input", "provider_input"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if key in ["charge_file","template_file","df","categories"] else ""
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 if uploaded_charge is not None:
@@ -113,10 +125,6 @@ if uploaded_charge is not None:
 uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 if uploaded_template is not None:
     st.session_state.template_file = uploaded_template
-
-# Persistent patient info
-for key, default in [("patient_input",""), ("member_input",""), ("provider_input","CIMAS")]:
-    if key not in st.session_state: st.session_state[key] = default
 
 st.text_input("Patient Name", key="patient_input")
 st.text_input("Medical Aid Number", key="member_input")
@@ -131,18 +139,22 @@ provider = st.session_state.provider_input
 # -----------------------------
 if st.session_state.charge_file and st.session_state.template_file:
     if st.button("Continue") or st.session_state.df is None:
-        st.session_state.df = load_charge_sheet(st.session_state.charge_file)
+        st.session_state.df, st.session_state.categories = load_charge_sheet(st.session_state.charge_file)
         st.success("Charge sheet loaded!")
 
     df = st.session_state.df
+    categories = st.session_state.categories
 
-    if df is not None:
-        st.subheader("Select Scan")
-        scan_list = df["EXAMINATION"].unique().tolist()
-        selected_scan = st.selectbox("Choose Scan", scan_list, key="scan_select")
+    if df is not None and categories:
+        st.subheader("Select Scan Category")
+        selected_category = st.selectbox("Category", categories)
+
+        # Select scan under chosen category
+        scan_list = df[df['CATEGORY'] == selected_category]['EXAMINATION'].tolist()
+        selected_scan = st.selectbox("Select Scan", scan_list)
 
         if selected_scan:
-            scan_row = df[df["EXAMINATION"] == selected_scan].iloc[0]
+            scan_row = df[(df['CATEGORY'] == selected_category) & (df['EXAMINATION'] == selected_scan)].iloc[0]
 
             st.write("### Scan Details:")
             st.write(f"**Tariff:** {scan_row['TARRIF']}")
