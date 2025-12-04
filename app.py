@@ -163,7 +163,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
             write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
             write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))  # <-- correct FEES column
             rowptr += 1
 
     buf = io.BytesIO()
@@ -177,9 +177,24 @@ os.makedirs(DATA_FOLDER, exist_ok=True)
 DEFAULT_CHARGE_SHEET = os.path.join(DATA_FOLDER, "charge_sheet.xlsx")
 DEFAULT_TEMPLATE = os.path.join(DATA_FOLDER, "template.xlsx")
 
-if "parsed_df" not in st.session_state and os.path.exists(DEFAULT_CHARGE_SHEET):
-    st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
-    st.success("Default charge sheet loaded from app storage.")
+# Load default charge sheet if it exists
+if os.path.exists(DEFAULT_CHARGE_SHEET):
+    if "parsed_df" not in st.session_state:
+        st.session_state.parsed_df = load_charge_sheet(DEFAULT_CHARGE_SHEET)
+        st.success("Default charge sheet loaded from app storage.")
+else:
+    uploaded_cs = st.file_uploader("Upload charge sheet", type=["xlsx"])
+    if uploaded_cs:
+        st.session_state.parsed_df = load_charge_sheet(uploaded_cs)
+        st.success("Charge sheet uploaded successfully.")
+
+# Load template if missing
+if not os.path.exists(DEFAULT_TEMPLATE):
+    uploaded_template = st.file_uploader("Upload quotation template", type=["xlsx"])
+    if uploaded_template:
+        with open(DEFAULT_TEMPLATE, "wb") as f:
+            f.write(uploaded_template.getbuffer())
+        st.success("Template uploaded successfully.")
 
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
@@ -187,8 +202,6 @@ debug_mode = st.checkbox("Show parsing debug output", value=False)
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-
-default_template_path = DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else None
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
@@ -233,9 +246,9 @@ if "parsed_df" in st.session_state:
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
             st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
-            if default_template_path:
+            if os.path.exists(DEFAULT_TEMPLATE):
                 if st.button("Generate Quotation and Download Excel"):
-                    out = fill_excel_template(default_template_path, patient, member, provider, selected_rows)
+                    out = fill_excel_template(DEFAULT_TEMPLATE, patient, member, provider, selected_rows)
                     st.download_button(
                         "Download Quotation",
                         data=out,
