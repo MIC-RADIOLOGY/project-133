@@ -18,124 +18,86 @@ GARBAGE_KEYS = {"FF", "TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO",
 def clean_text(x) -> str:
     if pd.isna(x):
         return ""
-    return str(x).strip()
+    return str(x).replace("\xa0", " ").strip()
 
 def u(x) -> str:
     return clean_text(x).upper()
 
 def safe_int(x, default=1):
     try:
-        v = pd.to_numeric(x, errors="coerce")
-        if v is None or (isinstance(v, float) and math.isnan(v)):
-            return default
-        return int(v)
+        x_str = str(x).replace(",", "").strip()
+        return int(float(x_str))
     except Exception:
         return default
 
 def safe_float(x, default=0.0):
     try:
-        v = pd.to_numeric(x, errors="coerce")
-        if v is None or (isinstance(v, float) and math.isnan(v)):
-            return default
-        return float(v)
+        x_str = str(x).replace(",", "").strip()
+        return float(x_str)
     except Exception:
         return default
 
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
-    # read without header (sheet often lacks proper headers)
     df_raw = pd.read_excel(file, header=None, dtype=object)
-    # we expect at least 5 columns; pad if necessary
+
+    # Ensure at least 5 columns (A–E)
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
     df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
 
     structured = []
-    current_category: Optional[str] = None
-    current_subcategory: Optional[str] = None
+    current_category = None
+    current_subcategory = None
 
-    # Try to find the header row where the row contains words like TARIFF / AMOUNT
-    header_row_idx = None
-    for idx, row in df_raw.iterrows():
-        row_text = " ".join([u(row[col]) for col in df_raw.columns])
-        if "TARRIF" in row_text or "TARIFF" in row_text or "AMOUNT" in row_text:
-            header_row_idx = idx
-            break
-    # If header row found, drop everything above it except categories/subcats
-    if header_row_idx is not None:
-        # We'll iterate from header_row_idx+1; but also collect categories above header if present
-        start_idx = header_row_idx + 1
-        # check above for a category-like text (single cell in col A)
-        for i in range(0, header_row_idx + 1):
-            val = u(df_raw.at[i, "A_EXAM"])
-            if val and val in MAIN_CATEGORIES:
-                current_category = val
-                break
-    else:
-        start_idx = 0
+    for idx, r in df_raw.iterrows():
+        exam = clean_text(r["A_EXAM"])
 
-    # iterate rows and form structured rows
-    for i in range(start_idx, len(df_raw)):
-        r = df_raw.iloc[i]
-        exam = u(r["A_EXAM"])
-        tariff_raw = r["B_TARIFF"]
-        amt_raw = r["E_AMOUNT"]
+        # skip empty
+        if exam == "":
+            continue
 
-        # If this row explicitly names a MAIN CATEGORY (e.g. ULTRA SOUND DOPPLERS)
-        if exam in MAIN_CATEGORIES:
+        exam_u = exam.upper()
+
+        # MAIN CATEGORY (full row only name)
+        if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # If row has no tariff & no amount and A_EXAM is non-empty -> treat as subcategory
-        tariff_is_blank = pd.isna(tariff_raw) or str(tariff_raw).strip() == ""
-        amount_is_blank = pd.isna(amt_raw) or str(amt_raw).strip() == ""
-        if exam and tariff_is_blank and amount_is_blank:
-            # ignore if garbage
-            if exam in GARBAGE_KEYS:
-                continue
-            # treat as subcategory
+        # IGNORE ROWS YOU DON'T WANT
+        if exam_u in {"FF", "TOTAL", "CO-PAYMENT", "CO PAYMENT"}:
+            continue
+
+        # SUBCATEGORY (Exam filled, but tariff & amount blank)
+        tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
+        amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
+        if exam and tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
             continue
 
         # If row is garbage key in A_EXAM, skip
-        if exam in GARBAGE_KEYS:
+        if exam_u in GARBAGE_KEYS:
             continue
 
-        # Otherwise, treat as a scan row (even if some fields missing)
-        row_tariff = safe_float(tariff_raw, default=None)
-        row_mod = clean_text(r["C_MOD"])
+        # --- SCAN ITEM ---
+        row_tariff = safe_float(r["B_TARIFF"], default=None)
+        row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
-        row_amt = safe_float(amt_raw, default=0.0)
+        row_mod = clean_text(r["C_MOD"])
 
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
-            "SCAN": clean_text(r["A_EXAM"]),
+            "SCAN": exam,
             "TARIFF": row_tariff,
             "MODIFIER": row_mod,
             "QTY": row_qty,
             "AMOUNT": row_amt
         })
 
-    df_struct = pd.DataFrame(structured, columns=[
-        "CATEGORY", "SUBCATEGORY", "SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"
-    ])
-    # If parser produced no rows, attempt fallback: treat every row with a B_TARIFF as scan
-    if df_struct.empty:
-        for _, r in df_raw.iterrows():
-            if not (pd.isna(r["B_TARIFF"]) and pd.isna(r["E_AMOUNT"])):
-                df_struct = df_struct.append({
-                    "CATEGORY": None,
-                    "SUBCATEGORY": None,
-                    "SCAN": clean_text(r["A_EXAM"]),
-                    "TARIFF": safe_float(r["B_TARIFF"], default=None),
-                    "MODIFIER": clean_text(r["C_MOD"]),
-                    "QTY": safe_int(r["D_QTY"], default=1),
-                    "AMOUNT": safe_float(r["E_AMOUNT"], default=0.0)
-                }, ignore_index=True)
-    return df_struct
+    return pd.DataFrame(structured)
 
 # ---------- Excel template filler ----------
 def write_safe(ws, r, c, value):
@@ -151,15 +113,6 @@ def write_safe(ws, r, c, value):
                 return
 
 def find_template_positions(ws):
-    """
-    Try to locate:
-      - patient cell (cell next to label PATIENT)
-      - member cell (cell next to MEMBER)
-      - provider cell (cell next to PROVIDER / EXAMINATION)
-      - the description header row (DESCRIPTION) and its column
-      - a TOTAL label to place the overall total (optional)
-    Returns dict with row/col positions.
-    """
     pos = {}
     for row in ws.iter_rows(min_row=1, max_row=200, min_col=1, max_col=50):
         for cell in row:
@@ -179,9 +132,6 @@ def find_template_positions(ws):
     return pos
 
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
-    """
-    scan_rows: list/df of scan dicts/rows to add (can be a single row or many)
-    """
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -209,13 +159,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, desc_col + 4, sr.get("AMOUNT"))
             rowptr += 1
 
-        # write total if position exists
         if "total_cell" in pos:
             total = sum([safe_float(s.get("AMOUNT"), 0.0) for s in scan_rows])
             r, c = pos["total_cell"]
             write_safe(ws, r, c, total)
     else:
-        # fallback: try to write into first sheet area top-left
         rowptr = 25
         desc_col = 1
         for sr in scan_rows:
@@ -261,10 +209,8 @@ if "parsed_df" in st.session_state:
         st.write("First 50 parsed rows:")
         st.dataframe(df.head(50))
 
-    # categories
     cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
     if not cats:
-        # fallback: allow selecting by SUBCATEGORY or show all scans
         subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())] if "SUBCATEGORY" in df.columns else []
         if subs:
             st.warning("No main categories detected; choose a Subcategory instead.")
@@ -286,18 +232,16 @@ if "parsed_df" in st.session_state:
             subsel = st.selectbox("Select Subcategory", subs)
             scans_for_sub = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == subsel)]
 
-    # show scan list and allow multiple selection
     if scans_for_sub.empty:
         st.warning("No scans available for the current selection.")
     else:
         scans_for_sub = scans_for_sub.reset_index(drop=True)
-        # create display labels
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
         )
-        sel_indices = st.multiselect("Select scans to add to quotation (you can select multiple)", options=list(range(len(scans_for_sub))),
+        sel_indices = st.multiselect("Select scans to add to quotation (you can select multiple)",
+                                     options=list(range(len(scans_for_sub))),
                                      format_func=lambda i: scans_for_sub.at[i, "label"])
-        # build selected list
         selected_rows = [scans_for_sub.iloc[i].to_dict() for i in sel_indices]
         if selected_rows:
             st.write("Selected scans:")
