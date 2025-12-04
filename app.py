@@ -52,7 +52,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     for idx, r in df_raw.iterrows():
         exam = clean_text(r["A_EXAM"])
-
         if exam == "":
             continue
 
@@ -63,16 +62,13 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = None
             continue
 
-        if exam_u in {"FF", "TOTAL", "CO-PAYMENT", "CO PAYMENT"}:
+        if exam_u in GARBAGE_KEYS:
             continue
 
         tariff_str = str(r["B_TARIFF"]).strip() if not pd.isna(r["B_TARIFF"]) else ""
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
         if exam and tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
-            continue
-
-        if exam_u in GARBAGE_KEYS:
             continue
 
         row_tariff = safe_float(r["B_TARIFF"], default=None)
@@ -105,8 +101,14 @@ def write_safe(ws, r, c, value):
                 return
 
 def find_template_positions(ws):
+    """
+    Detect table headers and return exact column positions.
+    Returns dict with:
+      'patient_cell', 'member_cell', 'provider_cell', 
+      'table_start_row', 'cols' (mapping header -> column)
+    """
     pos = {}
-    for row in ws.iter_rows(min_row=1, max_row=200, min_col=1, max_col=50):
+    for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
             if cell.value:
                 t = u(cell.value)
@@ -116,11 +118,15 @@ def find_template_positions(ws):
                     pos["member_cell"] = (cell.row, cell.column + 1)
                 if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
                     pos["provider_cell"] = (cell.row, cell.column + 1)
-                if "DESCRIPTION" in t and "table_start_row" not in pos:
+
+                # Detect table header columns
+                headers = ["DESCRIPTION","TARRIF","MOD","QTY","FEES","AMOUNT"]
+                if any(h in t for h in headers) and "cols" not in pos:
+                    pos["cols"] = {}
                     pos["table_start_row"] = cell.row + 1
-                    pos["desc_col"] = cell.column
-                if t.strip() == "TOTAL" and "total_cell" not in pos:
-                    pos["total_cell"] = (cell.row, cell.column + 6)
+                for h in headers:
+                    if h in t:
+                        pos["cols"][h] = cell.column
     return pos
 
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -138,18 +144,19 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         r, c = pos["provider_cell"]
         write_safe(ws, r, c, provider)
 
-    if "table_start_row" in pos:
+    if "table_start_row" in pos and "cols" in pos:
         rowptr = pos["table_start_row"]
-        desc_col = pos["desc_col"]
+        cols = pos["cols"]
 
         for sr in scan_rows:
-            write_safe(ws, rowptr, desc_col, sr.get("SCAN"))           # DESCRIPTION
-            write_safe(ws, rowptr, desc_col + 1, sr.get("TARIFF"))     # TARRIF
-            write_safe(ws, rowptr, desc_col + 2, sr.get("MODIFIER"))   # MOD
-            write_safe(ws, rowptr, desc_col + 3, sr.get("QTY"))        # QTY
-            write_safe(ws, rowptr, desc_col + 4, sr.get("AMOUNT"))     # FEES (correct column now)
+            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
+            write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
+            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
+            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
+        # Total if exists
         if "total_cell" in pos:
             total = sum([safe_float(s.get("AMOUNT"), 0.0) for s in scan_rows])
             r, c = pos["total_cell"]
