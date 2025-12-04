@@ -1,206 +1,137 @@
 import streamlit as st
 import pandas as pd
+from fpdf import FPDF
 import io
-import re
 
-# List of all relevant CIMAS tariff files to load from the environment
-# These file names are derived from the uploaded CIMAS spreadsheet sections.
-CIMAS_FILES = [
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - IMAGE INTESIFIER .csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - MAMMOGRAPHY.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - FLUROSCOPY RECIPES.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - CT ANGIO RECIPES.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - CT SCAN RECIPES.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - XRAY RECIPES.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - USS RECIPES.csv",
-    "CIMAS - TARIFFS DECEMBER 2024.xlsx - USS DOPPLERS.csv",
-]
+st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# Function to attempt to load and clean the CSV data
-@st.cache_data
-def load_and_clean_data(file_paths):
-    """
-    Loads multiple CSV files, attempts to auto-detect the header row, 
-    standardizes column names, and combines the data into a single DataFrame.
-    
-    This function is cached by Streamlit to avoid reprocessing on every rerun.
-    """
-    all_data = []
-    
-    # Define potential names for the key columns (case-insensitive matching)
-    EXAMINATION_KEYS = ['EXAMINATION', 'Description']
-    TARIFF_KEYS = ['TARIFF', 'Tariff ']
-    # Look for common USD-related column names
-    USD_KEYS = ['CIMAS USD', 'USD', 'UNIT USD', 'FEES', 'AMOUNT'] 
-    
-    # Pre-compiled regex for filtering out noise (like "FF", "Total", blank lines)
-    # This helps clean up rows that are often subtotals or filler data
-    noise_pattern = re.compile(r'^(ff|total|co-?payment|exam\s*total|\s*)$', re.IGNORECASE)
+# -----------------------------
+# LOAD CHARGE SHEET
+# -----------------------------
+def load_charge_sheet(file):
+    df = pd.read_excel(file)
 
-    for file_path in file_paths:
-        try:
-            # 1. Read the file, skipping no rows initially, to detect the header
-            df_raw = pd.read_csv(file_path, header=None, skiprows=0, keep_default_na=True)
-            
-            # 2. Find the row containing the key header words (EXAMINATION or TARIFF)
-            header_row_index = -1
-            for i, row in df_raw.iterrows():
-                # Check for any key column name match in the row values
-                row_str = ' '.join(str(x) for x in row.values if pd.notna(x)).upper()
-                if any(key.strip().upper() in row_str for key in EXAMINATION_KEYS + TARIFF_KEYS):
-                    header_row_index = i
-                    break
-            
-            if header_row_index == -1:
-                st.warning(f"Skipping {file_path}: Could not reliably determine header row.")
-                continue
+    # Clean columns if needed
+    df.columns = [str(c).strip().upper() for c in df.columns]
 
-            # 3. Reload the dataframe using the correct header row
-            df = pd.read_csv(file_path, header=header_row_index)
-            
-            # 4. Normalize column names
-            col_map = {}
-            
-            # List of standard columns to look for
-            standard_cols = {
-                'Examination': EXAMINATION_KEYS,
-                'Tariff Code': TARIFF_KEYS,
-                'CIMAS USD': USD_KEYS
-            }
+    # Only keep rows with tariff numbers (valid scan lines)
+    valid_rows = df[df["TARRIF"].notna()]
 
-            # Map found original columns to standard names
-            for standard_name, potential_names in standard_cols.items():
-                found_col = next(
-                    (col for col in df.columns if str(col).strip().upper() in (name.strip().upper() for name in potential_names)), 
-                    None
-                )
-                if found_col:
-                    col_map[found_col] = standard_name
-                # If a required column is not found, it will be added to the missing list below.
+    # Ensure proper types
+    valid_rows["EXAMINATION"] = valid_rows["EXAMINATION"].astype(str)
+    valid_rows["TARRIF"] = valid_rows["TARRIF"].astype(str)
+    valid_rows["MODIFIER"] = valid_rows["MODIFIER"].astype(str)
+    valid_rows["QUANTITY"] = valid_rows["QUANTITY"]
+    valid_rows["AMOUNT"] = valid_rows["AMOUNT"]
 
-            required_standard_names = list(standard_cols.keys())
-            
-            # Check if all required columns were mapped (this is crucial for data integrity)
-            if len(col_map) < len(required_standard_names):
-                missing = [name for name in required_standard_names if name not in col_map.values()]
-                st.warning(f"Skipping {file_path}: Missing key columns in header row: {missing}. Found: {list(col_map.values())}")
-                continue
+    return valid_rows
 
 
-            # 5. Select, rename, and clean data
-            df_clean = df[list(col_map.keys())].rename(columns=col_map)
-            
-            # Clean Examination column: remove NaNs and filter noise
-            df_clean['Examination'] = df_clean['Examination'].astype(str).str.strip()
-            df_clean = df_clean[
-                df_clean['Examination'].notna() & 
-                (df_clean['Examination'].str.len() > 3) & # Filter out very short, often non-descriptive strings
-                (~df_clean['Examination'].apply(lambda x: bool(noise_pattern.match(x))))
-            ].copy()
-            
-            # Ensure Tariff Code is clean
-            df_clean['Tariff Code'] = df_clean['Tariff Code'].astype(str).str.strip()
+# -----------------------------
+# PDF GENERATOR
+# -----------------------------
+def generate_pdf(patient_name, med_number, provider, scan_name, scan_row):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
 
-            # Convert CIMAS USD to numeric, coercing errors to NaN
-            df_clean['CIMAS USD'] = pd.to_numeric(df_clean['CIMAS USD'], errors='coerce')
-            
-            # Remove rows where the USD value is invalid, NaN, or 0
-            df_clean = df_clean[df_clean['CIMAS USD'].notna() & (df_clean['CIMAS USD'] > 0)]
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "MEDICAL QUOTATION", ln=True, align="C")
 
-            # Add source file name for traceability
-            source_name = file_path.split(' - ')[-1].replace('.csv', '').strip()
-            df_clean['Source'] = source_name
-            
-            all_data.append(df_clean)
+    pdf.ln(5)
 
-        except Exception as e:
-            st.error(f"Error processing {file_path}: {e}")
+    pdf.set_font("Arial", size=12)
 
-    if all_data:
-        # Combine all processed dataframes
-        combined_df = pd.concat(all_data, ignore_index=True)
-        # Drop duplicates based on the primary fields (Examination and Code)
-        combined_df = combined_df.drop_duplicates(subset=['Examination', 'Tariff Code'], keep='first')
-        combined_df = combined_df.reset_index(drop=True)
-        return combined_df
-    else:
-        return pd.DataFrame()
+    # Patient details
+    pdf.cell(0, 8, f"Patient Name: {patient_name}", ln=True)
+    pdf.cell(0, 8, f"Medical Aid Number: {med_number}", ln=True)
+    pdf.cell(0, 8, f"Provider: {provider}", ln=True)
 
-# --- Main Application Function ---
+    pdf.ln(10)
 
-def main():
-    # Set the page configuration for a wider layout
-    st.set_page_config(layout="wide", page_title="Medical Tariff Search")
+    # Quotation table header
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(80, 8, "Examination", border=1)
+    pdf.cell(30, 8, "Tariff", border=1, align="C")
+    pdf.cell(25, 8, "Modifier", border=1, align="C")
+    pdf.cell(25, 8, "Qty", border=1, align="C")
+    pdf.cell(30, 8, "Amount", border=1, align="R")
+    pdf.ln()
 
-    # Load data
-    df_tariffs = load_and_clean_data(CIMAS_FILES)
-    
-    # --- Application Title and Description ---
-    st.title("🏥 Medical Imaging Tariff Search")
-    st.markdown("Use this tool to search for medical tariffs (Examination Name or TARIFF Code) across the combined CIMAS data sheets.")
-    
-    if df_tariffs.empty:
-        st.error("❌ Failed to load and combine tariff data from the CSV files. Please check the file formats or console for warnings.")
-        return
+    # Data row
+    pdf.set_font("Arial", size=12)
+    pdf.cell(80, 8, scan_name, border=1)
+    pdf.cell(30, 8, scan_row["TARRIF"], border=1, align="C")
+    pdf.cell(25, 8, scan_row["MODIFIER"], border=1, align="C")
+    pdf.cell(25, 8, str(scan_row["QUANTITY"]), border=1, align="C")
+    pdf.cell(30, 8, f"${scan_row['AMOUNT']}", border=1, align="R")
 
-    st.success(f"✅ Successfully loaded **{len(df_tariffs)}** unique tariff items from **{len(CIMAS_FILES)}** source files.")
+    pdf.ln(15)
 
-    # --- Search Input ---
-    search_query = st.text_input(
-        "Enter Examination Name or TARIFF Code:",
-        placeholder="e.g., Head, CT, Pelvis, 77001",
-        key="search_input"
-    ).strip()
+    # Total
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, f"Total Amount: ${scan_row['AMOUNT']}", ln=True)
 
-    # --- Search Logic ---
-    if search_query:
-        # Convert the query to lowercase for case-insensitive search
-        query_lower = search_query.lower()
-        
-        # 1. Search by Examination Name (case-insensitive, contains)
-        examination_match = df_tariffs['Examination'].astype(str).str.lower().str.contains(query_lower, na=False)
-        
-        # 2. Search by Tariff Code (contains for string/number search)
-        tariff_match = df_tariffs['Tariff Code'].astype(str).str.contains(search_query, na=False)
-        
-        # Combine the matches
-        filtered_df = df_tariffs[examination_match | tariff_match].copy()
+    buffer = io.BytesIO()
+    pdf.output(buffer)
+    buffer.seek(0)
+    return buffer
 
-        if not filtered_df.empty:
-            st.subheader(f"Search Results for '{search_query}' ({len(filtered_df)} items)")
-            
-            # Format the USD column for better display
-            filtered_df['CIMAS USD'] = filtered_df['CIMAS USD'].apply(lambda x: f"${x:,.2f}")
-            
-            # Select and reorder columns for display
-            display_df = filtered_df[['Examination', 'Tariff Code', 'CIMAS USD', 'Source']]
-            
-            # Display the results in an interactive table
-            st.dataframe(
-                display_df, 
-                use_container_width=True,
-                # Define column configurations for width and titles
-                column_config={
-                    "Examination": st.column_config.TextColumn("Examination", width="large"),
-                    "Tariff Code": st.column_config.TextColumn("Tariff Code", width="small"),
-                    "CIMAS USD": st.column_config.TextColumn("USD Tariff", width="small"),
-                    "Source": st.column_config.TextColumn("Source Sheet", width="medium"),
-                },
-                hide_index=True
+
+# -----------------------------
+# UI LAYOUT
+# -----------------------------
+st.title("📄 Medical Quotation Generator")
+st.write("Upload your charge sheet & fill in patient information to create a quotation.")
+
+uploaded_file = st.file_uploader("Upload the Excel Charge Sheet", type=["xlsx"])
+
+if uploaded_file:
+    df = load_charge_sheet(uploaded_file)
+
+    st.success("Charge sheet loaded successfully!")
+
+    st.subheader("Step 1: Enter Patient Details")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        patient_name = st.text_input("Patient Name")
+        med_number = st.text_input("Medical Aid Number")
+
+    with col2:
+        provider = st.text_input("Medical Aid Provider", value="CIMAS")
+
+    st.subheader("Step 2: Select Scan")
+
+    scan_list = df["EXAMINATION"].unique().tolist()
+    selected_scan = st.selectbox("Choose Scan", scan_list)
+
+    if selected_scan:
+        scan_row = df[df["EXAMINATION"] == selected_scan].iloc[0]
+
+        st.write("### Scan Details")
+        st.write(f"**Tariff:** {scan_row['TARRIF']}")
+        st.write(f"**Modifier:** {scan_row['MODIFIER']}")
+        st.write(f"**Quantity:** {scan_row['QUANTITY']}")
+        st.write(f"**Amount:** ${scan_row['AMOUNT']}")
+
+        if st.button("Generate Quotation PDF"):
+            pdf_file = generate_pdf(
+                patient_name,
+                med_number,
+                provider,
+                selected_scan,
+                scan_row
             )
-        else:
-            st.warning(f"No results found for **'{search_query}'**. Try a different or broader term.")
-            
-    else:
-        st.info("Start typing an examination name (e.g., 'USS', 'CT Head') or a tariff code (e.g., '77002') to search.")
-        
-        # Optional: Show a summary of loaded data when no search is active
-        st.subheader("Data Source Summary")
-        source_counts = df_tariffs['Source'].value_counts().reset_index()
-        source_counts.columns = ['Source Sheet', 'Number of Tariffs']
-        st.markdown("Tariff counts per original spreadsheet sheet:")
-        st.dataframe(source_counts, use_container_width=True, hide_index=True)
 
+            st.success("Quotation generated!")
 
-if __name__ == "__main__":
-    main()
+            st.download_button(
+                label="Download PDF",
+                data=pdf_file,
+                file_name=f"quotation_{patient_name}.pdf",
+                mime="application/pdf"
+            )
+
+else:
+    st.info("Upload your charge sheet to begin.")
