@@ -51,11 +51,13 @@ def load_charge_sheet(file) -> pd.DataFrame:
     current_subcategory: Optional[str] = None
 
     for _, r in df_raw.iterrows():
-        exam = clean_text(r["A_EXAM"])
+        # convert DESCRIPTION to string and strip spaces
+        exam = str(r["A_EXAM"]).strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
-        # Skip rows where DESCRIPTION is empty (except FF)
-        if (not exam or exam.strip() == "") and exam_u != "FF":
+        # -----------------------
+        # Skip empty DESCRIPTION except FF
+        if exam == "" and exam_u != "FF":
             continue
 
         # MAIN CATEGORY
@@ -64,7 +66,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = None
             continue
 
-        # Special case: FF
+        # Handle FF row explicitly
         if exam_u == "FF":
             row_tariff = safe_float(r["B_TARIFF"], default=None)
             row_amt = safe_float(r["E_AMOUNT"], default=0.0)
@@ -91,7 +93,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Only rows with DESCRIPTION text reach this point
+        # Scan row with proper DESCRIPTION
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
