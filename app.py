@@ -12,7 +12,7 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN", "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
 }
-# Removed "FF" from garbage keys so films are picked up
+# Removed "FF" from garbage keys
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 # ---------- Helpers ----------
@@ -89,6 +89,10 @@ def load_charge_sheet(file) -> pd.DataFrame:
         amount_str = str(r["E_AMOUNT"]).strip() if not pd.isna(r["E_AMOUNT"]) else ""
         if exam and tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
+            continue
+
+        # Skip numeric-only rows (phantom tariffs)
+        if exam.replace(".", "").isdigit():
             continue
 
         # Scan item
