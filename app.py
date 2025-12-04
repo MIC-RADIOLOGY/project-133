@@ -54,17 +54,13 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = str(r["A_EXAM"]).strip() if not pd.isna(r["A_EXAM"]) else ""
         exam_u = exam.upper()
 
-        # Skip empty DESCRIPTION except FF
-        if exam == "" and exam_u != "FF":
-            continue
-
         # MAIN CATEGORY
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # Handle FF row explicitly
+        # Handle FF explicitly
         if exam_u == "FF":
             row_tariff = safe_float(r["B_TARIFF"], default=None)
             row_amt = safe_float(r["E_AMOUNT"], default=0.0)
@@ -82,6 +78,10 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
         # Skip garbage keys
         if exam_u in GARBAGE_KEYS:
+            continue
+
+        # Skip rows with empty DESCRIPTION (prevents phantom 76282)
+        if exam == "":
             continue
 
         # Subcategory row (tariff & amount blank)
