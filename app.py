@@ -1,172 +1,170 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
-from io import BytesIO
+import openpyxl
+import io
 
-st.set_page_config(page_title="Scan Quotation Generator", layout="wide")
+st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# ---------------------- Load and parse charge sheet ----------------------
+MAIN_CATEGORIES = [
+    "ULTRASOUND",
+    "ULTRASOUND DOPPLERS",
+    "CT SCAN",
+    "FLUROSCOPY",
+    "X-RAY",
+]
 
-@st.cache_data(show_spinner=False)
-def load_charge_sheet(file) -> tuple:
-    # Load charge sheet without header because your data is complex
+INVALID_WORDS = ["TOTAL", "CO", "PAYMENT", "FF"]
+
+def clean_text(x):
+    if pd.isna(x): return ""
+    return str(x).strip().upper()
+
+# ----------------------------------------------------
+# LOAD & STRUCTURE CHARGE SHEET
+# ----------------------------------------------------
+def load_charge_sheet(file):
     df = pd.read_excel(file, header=None)
+    df.columns = ["EXAM", "TARIFF", "MOD", "QTY", "AMOUNT"]
 
-    # Rename columns to expected names or placeholders for processing
-    df.columns = ["EXAMINATION", "TARRIF", "MODIFIER", "QUANTITY", "AMOUNT"]
+    df["EXAM"] = df["EXAM"].astype(str)
 
-    # Clean data types and strip strings
-    df["EXAMINATION"] = df["EXAMINATION"].astype(str).str.strip()
-    df["TARRIF"] = df["TARRIF"].apply(lambda x: str(int(x)) if pd.notna(x) and str(x).replace('.', '', 1).isdigit() else None)
-    df["MODIFIER"] = df["MODIFIER"].astype(str).str.strip()
-    df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors='coerce').fillna(0).astype(int)
-    df["AMOUNT"] = pd.to_numeric(df["AMOUNT"], errors='coerce').fillna(0.0)
+    # Remove rows like TOTAL, CO-PAYMENT, FF etc.
+    df = df[~df["EXAM"].str.upper().apply(lambda x: any(w in x for w in INVALID_WORDS))]
 
-    # For hierarchical detection
-    categories = []
-    subcategories = []
+    # Build CATEGORY → SUBCATEGORY → SCAN
+    structured = []
+    current_cat = None
+    current_sub = None
 
-    current_category = None
-    current_subcategory = None
+    for _, row in df.iterrows():
+        exam = clean_text(row["EXAM"])
 
-    exclude_scans = {"TOTAL", "CO - Payment", "FF"}
+        # Is a main category?
+        if exam in MAIN_CATEGORIES:
+            current_cat = exam
+            current_sub = None
+            continue
 
-    # Add columns for category and subcategory
-    df["CATEGORY"] = None
-    df["SUBCATEGORY"] = None
+        # Is a subcategory (usually bold)?
+        if exam.isupper() and len(exam.split()) <= 3:
+            current_sub = exam
+            continue
 
-    for idx, row in df.iterrows():
-        ex_upper = row["EXAMINATION"].upper()
+        # Otherwise → this is the actual scan
+        if current_cat:
+            structured.append({
+                "CATEGORY": current_cat,
+                "SUBCATEGORY": current_sub,
+                "SCAN": exam,
+                "TARIFF": str(row["TARIFF"]),
+                "MODIFIER": str(row["MOD"]),
+                "QTY": int(pd.to_numeric(row["QTY"], errors="coerce") or 1),
+                "AMOUNT": float(pd.to_numeric(row["AMOUNT"], errors="coerce") or 0)
+            })
 
-        # Detect main category: usually upper case, no tariff, no quantity/amount
-        if pd.isna(row["TARRIF"]) and row["QUANTITY"] == 0 and row["AMOUNT"] == 0.0:
-            if ex_upper in exclude_scans:
-                # ignore these as category/subcategory
-                current_subcategory = None
-                continue
+    return pd.DataFrame(structured)
 
-            # Heuristic: treat lines with all caps and length > 3 as category
-            if ex_upper == row["EXAMINATION"] and len(ex_upper) > 3 and ex_upper.isalpha() or " " in ex_upper:
-                # It's a main category
-                current_category = row["EXAMINATION"]
-                categories.append(current_category)
-                current_subcategory = None
-            else:
-                # Treat as subcategory (if not main category)
-                current_subcategory = row["EXAMINATION"]
-                if current_subcategory not in subcategories:
-                    subcategories.append(current_subcategory)
-        else:
-            # Assign category and subcategory for scans only if not excluded
-            if ex_upper not in exclude_scans:
-                df.at[idx, "CATEGORY"] = current_category
-                df.at[idx, "SUBCATEGORY"] = current_subcategory
+# ----------------------------------------------------
+# FILL TEMPLATE
+# ----------------------------------------------------
+def set_cell_value(cell, value):
+    try:
+        cell.value = value
+    except:
+        # handle merged cells
+        for m in cell.parent.merged_cells.ranges:
+            if cell.coordinate in m:
+                top_left = m.coord.split(":")[0]
+                cell.parent[top_left].value = value
 
-    # Filter dataframe to only rows with category assigned and exclude rows like TOTAL, FF, CO-Payment
-    df_scans = df[df["CATEGORY"].notna()]
-    df_scans = df_scans[~df_scans["EXAMINATION"].str.upper().isin(exclude_scans)]
-
-    return df_scans, categories
-
-# ----------------------- Load and fill quotation template ------------------
-
-def fill_excel_template(template_file, patient_name, medical_aid_number, medical_aid_provider, selected_scans):
-    # Load the template into openpyxl workbook
-    wb = load_workbook(template_file)
+def fill_excel_template(template_file, patient, member, provider, scan_row):
+    wb = openpyxl.load_workbook(template_file)
     ws = wb.active
 
-    # Simple heuristics to find cells for patient data (you should adapt these for your template):
-    # Search cells containing specific keywords, then fill next cell (example approach)
-    for row in ws.iter_rows(min_row=1, max_row=20, min_col=1, max_col=10):
-        for cell in row:
-            if cell.value and isinstance(cell.value, str):
-                val = cell.value.lower()
-                if "for patient" in val or "patient" in val:
-                    ws.cell(row=cell.row, column=cell.column + 1, value=patient_name)
-                elif "member number" in val or "medical aid number" in val:
-                    ws.cell(row=cell.row, column=cell.column + 1, value=medical_aid_number)
-                elif "medical examination" in val or "medical aid provider" in val:
-                    ws.cell(row=cell.row, column=cell.column + 1, value=medical_aid_provider)
+    patient_cell = member_cell = provider_cell = None
+    scan_start = None
+    total_cell = None
 
-    # Start inserting scans from row after header - you will need to adjust based on your template layout
-    start_row = 23
-    current_row = start_row
+    for row in ws.iter_rows():
+        for c in row:
+            if c.value:
+                text = str(c.value).upper()
+                if "PATIENT" in text:
+                    patient_cell = ws.cell(c.row, c.column+1)
+                if "MEMBER" in text:
+                    member_cell = ws.cell(c.row, c.column+1)
+                if "PROVIDER" in text or "EXAMINATION" in text:
+                    provider_cell = ws.cell(c.row, c.column+1)
+                if "DESCRIPTION" in text:
+                    scan_start = c.row + 1
+                    desc_col = c.column
+                if "TOTAL" in text:
+                    total_cell = ws.cell(c.row, c.column+6)
 
-    for scan in selected_scans:
-        ws.cell(row=current_row, column=1, value=scan["EXAMINATION"])
-        ws.cell(row=current_row, column=2, value=int(scan["TARRIF"]))
-        ws.cell(row=current_row, column=3, value=scan["MODIFIER"] if scan["MODIFIER"] != "nan" else "")
-        ws.cell(row=current_row, column=4, value=scan["QUANTITY"])
-        ws.cell(row=current_row, column=5, value=scan["AMOUNT"])
-        current_row += 1
+    # fill patient info
+    if patient_cell: set_cell_value(patient_cell, patient)
+    if member_cell: set_cell_value(member_cell, member)
+    if provider_cell: set_cell_value(provider_cell, provider)
 
-    # Save to BytesIO buffer
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    # fill scan row
+    if scan_start:
+        set_cell_value(ws.cell(scan_start, desc_col), scan_row["SCAN"])
+        set_cell_value(ws.cell(scan_start, desc_col+1), scan_row["TARIFF"])
+        set_cell_value(ws.cell(scan_start, desc_col+2), scan_row["MODIFIER"])
+        set_cell_value(ws.cell(scan_start, desc_col+3), scan_row["QTY"])
+        set_cell_value(ws.cell(scan_start, desc_col+4), scan_row["AMOUNT"])
 
-# ----------------------------- Streamlit app -----------------------------
+    if total_cell:
+        set_cell_value(total_cell, scan_row["AMOUNT"])
 
-st.title("Scan Quotation Generator")
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
 
-# Upload charge sheet
-charge_file = st.file_uploader("Upload Charge Sheet Excel (Charge Sheet format)", type=["xlsx"])
+# ----------------------------------------------------
+# STREAMLIT UI
+# ----------------------------------------------------
+st.title("📄 Medical Quotation Generator (Corrected Version)")
 
-if charge_file:
-    with st.spinner("Loading charge sheet..."):
-        try:
-            df_charge, categories = load_charge_sheet(charge_file)
-            st.success("Charge sheet loaded successfully!")
-        except Exception as e:
-            st.error(f"Failed to load charge sheet: {e}")
-            st.stop()
+uploaded_charge = st.file_uploader("Upload Charge Sheet", type=["xlsx"])
+uploaded_template = st.file_uploader("Upload Quotation Template", type=["xlsx"])
 
-    # Select main category
-    selected_category = st.selectbox("Select Scan Main Category", options=categories)
+patient = st.text_input("Patient Name")
+member = st.text_input("Medical Aid Number")
+provider = st.text_input("Provider (CIMAS)", value="CIMAS")
 
-    # Filter subcategories for selected category
-    df_subcats = df_charge[df_charge["CATEGORY"] == selected_category]
-    subcategories = df_subcats["SUBCATEGORY"].dropna().unique().tolist()
-    selected_subcategory = st.selectbox("Select Subcategory", options=subcategories)
+if uploaded_charge and uploaded_template:
+    if st.button("Load Charge Sheet"):
+        df = load_charge_sheet(uploaded_charge)
+        st.session_state.df = df
+        st.success("Charge sheet loaded successfully!")
 
-    # Filter scans for selected category and subcategory
-    df_scans = df_subcats[df_subcats["SUBCATEGORY"] == selected_subcategory]
+    if "df" in st.session_state:
+        df = st.session_state.df
 
-    # Select scan(s)
-    scan_options = df_scans["EXAMINATION"].tolist()
-    selected_scan_names = st.multiselect("Select Scans", options=scan_options)
+        # Step 1 – Select main category
+        cat = st.selectbox("Select Main Category", df["CATEGORY"].unique())
 
-    # Filter selected scan details
-    selected_scans = df_scans[df_scans["EXAMINATION"].isin(selected_scan_names)].to_dict('records')
+        # Step 2 – select subcategory
+        sub_list = df[df["CATEGORY"] == cat]["SUBCATEGORY"].unique()
+        sub = st.selectbox("Select Sub-Category", sub_list)
 
-    # Patient info input
-    st.markdown("### Patient Information")
-    patient_name = st.text_input("Patient Name")
-    medical_aid_number = st.text_input("Medical Aid Number")
-    medical_aid_provider = st.text_input("Medical Aid Provider", value="CIMAS")
+        # Step 3 – select scan
+        scans = df[(df["CATEGORY"] == cat) & (df["SUBCATEGORY"] == sub)]
+        scan_name = st.selectbox("Select Scan", scans["SCAN"].unique())
 
-    # Upload quotation template
-    template_file = st.file_uploader("Upload Quotation Template Excel", type=["xlsx"])
+        scan_row = scans[scans["SCAN"] == scan_name].iloc[0]
 
-    # Continue button
-    if st.button("Continue"):
-        if not patient_name or not medical_aid_number or not selected_scans or not template_file:
-            st.error("Please fill all patient info, select scans, and upload the quotation template.")
-        else:
-            with st.spinner("Generating quotation..."):
-                output_excel = fill_excel_template(
-                    template_file,
-                    patient_name,
-                    medical_aid_number,
-                    medical_aid_provider,
-                    selected_scans
-                )
-                st.success("Quotation generated successfully!")
+        st.write("### Scan Details")
+        st.write(scan_row)
 
-                st.download_button(
-                    label="Download Filled Quotation",
-                    data=output_excel,
-                    file_name="filled_quotation.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        if st.button("Generate Quotation"):
+            output = fill_excel_template(
+                uploaded_template, patient, member, provider, scan_row
+            )
+            st.download_button(
+                "Download Quotation",
+                data=output,
+                file_name=f"quotation_{patient}.xlsx"
+            )
