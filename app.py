@@ -5,51 +5,54 @@ import io
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# -----------------------------------
-# HELPER FUNCTION: Safe assignment to possibly merged cells
-# -----------------------------------
+# -----------------------------
+# Helper: Safe assignment to merged cells
+# -----------------------------
 def set_cell_value_safe(cell, value):
-    """Assign value to cell, even if it's part of a merged range."""
     try:
         cell.value = value
     except AttributeError:
-        # It's a merged cell, assign to top-left cell of the merged range
         for merged_range in cell.parent.merged_cells.ranges:
             if cell.coordinate in merged_range:
                 cell.parent[merged_range.coord.split(":")[0]].value = value
                 return
 
-# -----------------------------------
-# LOAD CHARGE SHEET WITH CATEGORIES
-# -----------------------------------
+# -----------------------------
+# Load charge sheet with robust category detection
+# -----------------------------
 def load_charge_sheet(file):
     df = pd.read_excel(file, header=None)
     df.columns = ["EXAMINATION", "TARRIF", "MODIFIER", "QUANTITY", "AMOUNT"]
 
-    # Detect categories
-    category = None
-    categories = []
-    for i, row in df.iterrows():
-        if pd.isna(row["TARRIF"]) or row["TARRIF"] == "":
-            # Main heading row
-            category = str(row["EXAMINATION"])
-            categories.append(category)
-            df.at[i, "CATEGORY"] = None  # headings themselves have no category
-        else:
-            df.at[i, "CATEGORY"] = category
+    # Strip strings and clean
+    df["EXAMINATION"] = df["EXAMINATION"].astype(str).str.strip()
+    df["TARRIF"] = df["TARRIF"].astype(str).str.strip()
+    df["MODIFIER"] = df["MODIFIER"].astype(str).str.strip()
 
-    # Keep only rows with tariffs
-    df = df[df["TARRIF"].notna()]
-    df["EXAMINATION"] = df["EXAMINATION"].astype(str)
-    df["TARRIF"] = df["TARRIF"].astype(str)
-    df["MODIFIER"] = df["MODIFIER"].astype(str)
     df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors='coerce').fillna(0).astype(int)
-    df["AMOUNT"] = pd.to_numeric(df["AMOUNT"], errors='coerce').fillna(0.0).astype(float)
+    df["AMOUNT"] = pd.to_numeric(df["AMOUNT"], errors='coerce').fillna(0.0)
+
+    # Detect categories and assign to scans
+    df["CATEGORY"] = None
+    current_category = None
+    categories = []
+
+    for idx, row in df.iterrows():
+        # Category row: TARRIF, QUANTITY, AMOUNT are empty
+        if pd.isna(row["TARRIF"]) and row["QUANTITY"] == 0 and row["AMOUNT"] == 0.0:
+            current_category = row["EXAMINATION"]
+            categories.append(current_category)
+        else:
+            df.at[idx, "CATEGORY"] = current_category
+
+    # Keep only rows with TARRIF (actual scans)
+    df = df[df["TARRIF"].notna()]
+
     return df, categories
 
-# -----------------------------------
-# FILL EXCEL TEMPLATE AUTOMATICALLY
-# -----------------------------------
+# -----------------------------
+# Fill Excel template
+# -----------------------------
 def fill_excel_template(template_file, patient, member, provider, scan_row):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
@@ -57,36 +60,26 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
     patient_cell = member_cell = provider_cell = None
     scan_start_row = desc_col = tarif_col = modi_col = qty_col = amt_col = total_cell = None
 
-    # Flexible detection of fields
+    # Detect template fields
     for row in ws.iter_rows():
         for cell in row:
             if cell.value:
                 val = str(cell.value).strip().upper()
-                if "PATIENT" in val and patient_cell is None:
+                if "PATIENT" in val and not patient_cell:
                     patient_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                elif "MEMBER" in val and member_cell is None:
+                elif "MEMBER" in val and not member_cell:
                     member_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                elif ("PROVIDER" in val or "EXAMINATION" in val) and provider_cell is None:
+                elif ("PROVIDER" in val or "EXAMINATION" in val) and not provider_cell:
                     provider_cell = ws.cell(row=cell.row, column=cell.column + 1)
-                elif "DESCRIPTION" in val and scan_start_row is None:
+                elif "DESCRIPTION" in val and not scan_start_row:
                     scan_start_row = cell.row + 1
                     desc_col = cell.column
                     tarif_col = cell.column + 1
                     modi_col = cell.column + 2
                     qty_col = cell.column + 3
                     amt_col = cell.column + 4
-                elif "TOTAL" in val and total_cell is None:
+                elif "TOTAL" in val and not total_cell:
                     total_cell = ws.cell(row=cell.row, column=cell.column + 6)
-
-    # Warn user if fields missing
-    missing_fields = []
-    if not patient_cell: missing_fields.append("Patient Name")
-    if not member_cell: missing_fields.append("Member Number")
-    if not provider_cell: missing_fields.append("Provider")
-    if not scan_start_row: missing_fields.append("Scan Table")
-    if not total_cell: missing_fields.append("Total Cell")
-    if missing_fields:
-        st.warning(f"Could not detect these fields in template: {', '.join(missing_fields)}")
 
     # Assign values safely
     if patient_cell: set_cell_value_safe(patient_cell, patient)
@@ -108,23 +101,21 @@ def fill_excel_template(template_file, patient, member, provider, scan_row):
     output.seek(0)
     return output
 
-# -----------------------------------
-# STREAMLIT INTERFACE
-# -----------------------------------
+# -----------------------------
+# Streamlit interface
+# -----------------------------
 st.title("📄 Medical Quotation Generator")
 
-# Persistent session state
-for key in ["charge_file", "template_file", "df", "categories", "patient_input", "member_input", "provider_input"]:
+# Session state
+for key in ["charge_file","template_file","df","categories","patient_input","member_input","provider_input"]:
     if key not in st.session_state:
         st.session_state[key] = None if key in ["charge_file","template_file","df","categories"] else ""
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-if uploaded_charge is not None:
-    st.session_state.charge_file = uploaded_charge
+if uploaded_charge: st.session_state.charge_file = uploaded_charge
 
 uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
-if uploaded_template is not None:
-    st.session_state.template_file = uploaded_template
+if uploaded_template: st.session_state.template_file = uploaded_template
 
 st.text_input("Patient Name", key="patient_input")
 st.text_input("Medical Aid Number", key="member_input")
@@ -149,7 +140,6 @@ if st.session_state.charge_file and st.session_state.template_file:
         st.subheader("Select Scan Category")
         selected_category = st.selectbox("Category", categories)
 
-        # Select scan under chosen category
         scan_list = df[df['CATEGORY'] == selected_category]['EXAMINATION'].tolist()
         selected_scan = st.selectbox("Select Scan", scan_list)
 
@@ -180,3 +170,6 @@ if st.session_state.charge_file and st.session_state.template_file:
                     )
 else:
     st.info("Upload your charge sheet and quotation template to continue.")
+
+# Optional: show first 20 rows for debugging
+# st.dataframe(df.head(20))
