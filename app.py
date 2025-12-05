@@ -97,10 +97,15 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
+    """
+    Write value to ws.cell(r,c). If the cell belongs to a merged range,
+    write to the top-left cell of that merged range to preserve formatting.
+    """
     cell = ws.cell(row=r, column=c)
     try:
         cell.value = value
-    except:
+    except Exception:
+        # fallback: if the cell is in a merged range, write to top-left of that range
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 topcell = mr.coord.split(":")[0]
@@ -132,7 +137,7 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-# ---------- Template Filler (with TOTAL column update) ----------
+# ---------- Template Filler (TOTAL written to fixed cell G22) ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
@@ -156,7 +161,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
         rowptr = start_row
 
-        # --- Write Scan Rows ---
+        # Write the scan rows
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
@@ -165,13 +170,14 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # --- WRITE TOTAL IN NEXT COLUMN AFTER AMOUNT (ON FIRST SCAN ROW) ---
-        total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in scan_rows])
+        # Compute total of selected AMOUNT values
+        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
 
-        col_amount = cols.get("AMOUNT")
-        col_total = col_amount + 1  # NEXT COLUMN (keeps blue diagonal intact)
-
-        write_safe(ws, start_row, col_total, total_amt)
+        # **WRITE TOTAL TO FIXED CELL G22 (row=22, col=7)**
+        # This will overwrite the previous total and should preserve the diagonal border.
+        TARGET_TOTAL_ROW = 22
+        TARGET_TOTAL_COL = 7
+        write_safe(ws, TARGET_TOTAL_ROW, TARGET_TOTAL_COL, total_amt)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -207,10 +213,10 @@ if "parsed_df" in st.session_state:
         st.write("Parsed DataFrame columns:", df.columns.tolist())
         st.dataframe(df.head(50))
 
-    cats = [c for c in sorted(df["CATEGORY"].dropna().unique())]
+    cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
 
     if not cats:
-        subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())]
+        subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())] if "SUBCATEGORY" in df.columns else []
         if subs:
             st.warning("No main categories detected; choose a Subcategory instead.")
             subsel = st.selectbox("Select Subcategory", subs)
@@ -222,9 +228,7 @@ if "parsed_df" in st.session_state:
         if main_sel == "-- choose --":
             st.info("Please select a main category.")
             st.stop()
-
         subs = [s for s in sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())]
-
         if not subs:
             scans_for_sub = df[df["CATEGORY"] == main_sel]
         else:
@@ -238,18 +242,14 @@ if "parsed_df" in st.session_state:
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
         )
-
         sel_indices = st.multiselect(
             "Select scans to add to quotation (you can select multiple)",
             options=list(range(len(scans_for_sub))),
             format_func=lambda i: scans_for_sub.at[i, "label"]
         )
-
         selected_rows = [scans_for_sub.iloc[i].to_dict() for i in sel_indices]
-
         if selected_rows:
             st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
-
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
             st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
