@@ -97,15 +97,10 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
-    """
-    Write value to ws.cell(r,c). If the cell belongs to a merged range,
-    write to the top-left cell of that merged range to preserve formatting.
-    """
     cell = ws.cell(row=r, column=c)
     try:
         cell.value = value
     except Exception:
-        # fallback: if the cell is in a merged range, write to top-left of that range
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 topcell = mr.coord.split(":")[0]
@@ -137,31 +132,31 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-# ---------- Template Filler (TOTAL written to fixed cell G22) ----------
+# ---------- Template Filler (TOTAL written safely without breaking BLUE LINE) ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
+    # Fill header data
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         write_safe(ws, r, c, patient)
-
     if "member_cell" in pos:
         r, c = pos["member_cell"]
         write_safe(ws, r, c, member)
-
     if "provider_cell" in pos:
         r, c = pos["provider_cell"]
         write_safe(ws, r, c, provider)
 
+    # Fill table + TOTAL
     if "table_start_row" in pos and "cols" in pos:
         start_row = pos["table_start_row"]
         cols = pos["cols"]
 
         rowptr = start_row
 
-        # Write the scan rows
+        # Write selected scans
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
@@ -170,19 +165,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Compute total of selected AMOUNT values
+        # Compute total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
 
-        # **WRITE TOTAL TO FIXED CELL G22 (row=22, col=7)**
-        # This will overwrite the previous total and should preserve the diagonal border.
-        TARGET_TOTAL_ROW = 22
-        TARGET_TOTAL_COL = 7
-        write_safe(ws, TARGET_TOTAL_ROW, TARGET_TOTAL_COL, total_amt)
+        # ---- BLUE LINE SAFE WRITE ----
+        target_coord = "G22"
+        target_cell = ws[target_coord]
+
+        merged_top_left = None
+        for rng in ws.merged_cells.ranges:
+            if target_cell.coordinate in rng:
+                merged_top_left = rng.coord.split(":")[0]
+                break
+
+        if merged_top_left:
+            ws[merged_top_left].value = total_amt
+        else:
+            ws[target_coord].value = total_amt
+        # --------------------------------
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
+
 
 # ---------- Streamlit UI ----------
 st.title("📄 Medical Quotation Generator (Final)")
@@ -248,6 +254,7 @@ if "parsed_df" in st.session_state:
             format_func=lambda i: scans_for_sub.at[i, "label"]
         )
         selected_rows = [scans_for_sub.iloc[i].to_dict() for i in sel_indices]
+
         if selected_rows:
             st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
