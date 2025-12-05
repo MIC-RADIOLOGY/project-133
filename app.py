@@ -12,7 +12,7 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN", "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
 }
-# keep "FF" out of garbage so films are picked up
+# keep FF (films) not as garbage
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 # ---------- Helpers ----------
@@ -33,14 +33,19 @@ def safe_int(x, default=1):
 
 def safe_float(x, default=0.0):
     try:
-        x_str = str(x).replace(",", "").strip()
+        x_str = str(x).replace(",", "").strip().replace("$", "").replace(" ", "")
         return float(x_str)
     except Exception:
         return default
 
-# ---------- Parser (robust against phantom tariff rows) ----------
+# ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
-    # file: uploaded file-like object or path
+    """
+    Read an uploaded charge sheet (file-like or path) and return structured DataFrame with
+    columns: CATEGORY, SUBCATEGORY, SCAN, TARIFF, MODIFIER, QTY, AMOUNT
+    The parser is robust: it treats 'FF' specially (films), ignores garbage rows, and
+    will not auto-add stray tariff rows unless they have a SCAN/description or are FF.
+    """
     df_raw = pd.read_excel(file, header=None, dtype=object)
 
     # ensure at least 5 columns
@@ -54,22 +59,21 @@ def load_charge_sheet(file) -> pd.DataFrame:
     current_subcategory: Optional[str] = None
 
     for _, r in df_raw.iterrows():
-        # robust cleaning
         exam_raw = r["A_EXAM"]
         exam = clean_text(exam_raw)
         exam_u = exam.upper()
 
-        # skip completely blank A_EXAM unless it's FF (we want FF even if label cell blank)
+        # Skip empty A_EXAM unless it's an 'FF' row we want to capture (rare)
         if exam == "" and exam_u != "FF":
             continue
 
-        # MAIN CATEGORY rows
+        # MAIN CATEGORY detection
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # explicit FF row handling (films)
+        # Explicit FF handling (films) — keep these even if other columns blank
         if exam_u == "FF":
             row_tariff = safe_float(r["B_TARIFF"], default=None)
             row_amt = safe_float(r["E_AMOUNT"], default=0.0)
@@ -85,18 +89,18 @@ def load_charge_sheet(file) -> pd.DataFrame:
             })
             continue
 
-        # skip garbage keys
+        # Skip garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # treat rows with non-empty A_EXAM but empty tariff & amount as subcategory
+        # If A_EXAM present but both tariff & amount blank -> subcategory
         tariff_str = "" if pd.isna(r["B_TARIFF"]) else str(r["B_TARIFF"]).strip()
         amount_str = "" if pd.isna(r["E_AMOUNT"]) else str(r["E_AMOUNT"]).strip()
         if tariff_str in ["", "nan", "None", "NaN"] and amount_str in ["", "nan", "None", "NaN"]:
             current_subcategory = exam
             continue
 
-        # otherwise a scan row
+        # Otherwise treat as scan row
         row_tariff = safe_float(r["B_TARIFF"], default=None)
         row_amt = safe_float(r["E_AMOUNT"], default=0.0)
         row_qty = safe_int(r["D_QTY"], default=1)
@@ -118,12 +122,11 @@ def load_charge_sheet(file) -> pd.DataFrame:
     return df_struct
 
 # ---------- Excel template helpers ----------
-def write_safe(ws, r, c, value, append=True):
+def write_safe_cell(ws, r, c, value, append=False):
     """
-    Write value into worksheet cell (r,c).
-    If append=True and there's existing text, append with a space.
-    Handles merged cells by writing into top-left of merged range.
-    r,c are 1-based integers.
+    Write into worksheet cell (row r, col c). r,c are 1-based.
+    If append=True and the cell already has a value, append with a space.
+    Handles merged cells by writing to top-left cell of the merged range.
     """
     cell = ws.cell(row=r, column=c)
     try:
@@ -136,64 +139,102 @@ def write_safe(ws, r, c, value, append=True):
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 top = mr.coord.split(":")[0]
-                ws[top].value = f"{ws[top].value or ''} {value}" if append and ws[top].value else value
+                top_cell = ws[top]
+                if append and top_cell.value:
+                    top_cell.value = f"{top_cell.value} {value}"
+                else:
+                    top_cell.value = value
                 return
 
 def find_template_positions(ws):
     """
-    Find key positions in the template:
-     - patient_cell: cell that contains the label 'FOR PATIENT' (return its (row,col))
-     - member_cell: cell containing 'MEMBER' label (return its (row,col))
-     - provider_cell: cell containing 'PROVIDER' or 'EXAMINATION' label (return its (row,col))
-     - table_start_row and cols mapping for DESCRIPTION,TARRIF,MOD,QTY,FEES,AMOUNT
+    Scan worksheet to find:
+      - patient_cell: tuple(row,col) of the cell that contains 'FOR PATIENT' or 'PATIENT'
+      - member_cell: cell that contains 'MEMBER'
+      - provider_cell: cell that contains 'PROVIDER' or 'EXAMINATION'
+      - cols mapping for DESCRIPTION, TARRIF, MOD, QTY, FEES, AMOUNT and table_start_row
     """
     pos = {}
-    header_keywords = ["DESCRIPTION","TARRIF","MOD","QTY","FEES","AMOUNT"]
-    for row in ws.iter_rows(min_row=1, max_row=300):
+    headers = ["DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT", "FEE"]
+    for row in ws.iter_rows(min_row=1, max_row=400):
         for cell in row:
             if not cell.value:
                 continue
             t = u(cell.value)
-            # For patient/member/provider, keep the same cell (we will append into it)
-            if "FOR PATIENT" in t or t.strip().startswith("FOR PATIENT") or "PATIENT" == t.strip():
-                if "patient_cell" not in pos:
-                    pos["patient_cell"] = (cell.row, cell.column)
+            # patient / member / provider detections (we will replace text after colon)
+            if ("FOR PATIENT" in t or t.strip().startswith("FOR PATIENT")) and "patient_cell" not in pos:
+                pos["patient_cell"] = (cell.row, cell.column)
+            elif "PATIENT" == t.strip() and "patient_cell" not in pos:
+                pos["patient_cell"] = (cell.row, cell.column)
+
             if "MEMBER" in t and "member_cell" not in pos:
                 pos["member_cell"] = (cell.row, cell.column)
             if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
                 pos["provider_cell"] = (cell.row, cell.column)
 
-            # detect table header row and columns
-            if any(h in t for h in header_keywords):
+            # detect table headers
+            if any(h in t for h in headers):
                 if "cols" not in pos:
                     pos["cols"] = {}
                     pos["table_start_row"] = cell.row + 1
-                for h in header_keywords:
+                for h in headers:
                     if h in t:
-                        pos["cols"][h] = cell.column
+                        # normalize FEES/FEE
+                        key = "FEES" if "FEE" in h else h
+                        pos["cols"][key] = cell.column
     return pos
 
-def fill_excel_template_from_bytes(template_bytes: bytes, patient: str, member: str, provider: str, scan_rows: list):
+def replace_header_field(ws, cell_pos, label_keyword, new_value):
     """
-    template_bytes: bytes of the uploaded template
+    Replace everything after the colon in a header cell that matches label_keyword.
+    Example: cell contains "FOR PATIENT: Old Name" -> becomes "FOR PATIENT: New Name"
+    If there is no colon, it will replace the full cell with "LABEL: value".
+    cell_pos: (row,col)
+    label_keyword: uppercase label to set, e.g. "FOR PATIENT" or "MEMBER NUMBER"
+    """
+    r, c = cell_pos
+    cell = ws.cell(row=r, column=c)
+    current = ""
+    try:
+        current = "" if cell.value is None else str(cell.value)
+    except Exception:
+        current = ""
+    cur_u = u(current)
+    # find the colon; if present preserve left part up to colon
+    if ":" in current:
+        left = current.split(":", 1)[0].strip()
+        new_text = f"{left}: {new_value}"
+    else:
+        # if no colon, use provided label keyword
+        new_text = f"{label_keyword}: {new_value}"
+    # write into top-left if merged
+    try:
+        cell.value = new_text
+    except Exception:
+        for mr in ws.merged_cells.ranges:
+            if cell.coordinate in mr:
+                top = mr.coord.split(":")[0]
+                ws[top].value = new_text
+                return
+
+def fill_template_from_bytes(template_bytes: bytes, patient: str, member: str, provider: str, scan_rows: list):
+    """
+    template_bytes: bytes from uploaded template file
     scan_rows: list of dicts with keys: SCAN, TARIFF, MODIFIER, QTY, AMOUNT
     """
     wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Patient / Member / Provider: append into the label cell (so label stays and value follows)
+    # Replace header fields (overwrite previous name/member)
     if "patient_cell" in pos:
-        r, c = pos["patient_cell"]
-        write_safe(ws, r, c, patient, append=True)
+        replace_header_field(ws, pos["patient_cell"], "FOR PATIENT", patient)
     if "member_cell" in pos:
-        r, c = pos["member_cell"]
-        write_safe(ws, r, c, member, append=True)
+        replace_header_field(ws, pos["member_cell"], "MEMBER NUMBER", member)
     if "provider_cell" in pos:
-        r, c = pos["provider_cell"]
-        write_safe(ws, r, c, provider, append=True)
+        replace_header_field(ws, pos["provider_cell"], "PROVIDER", provider)
 
-    # Table: write only the selected scan_rows into consecutive rows starting at table_start_row
+    # Fill table rows only with selected scan_rows
     if "table_start_row" in pos and "cols" in pos:
         rowptr = pos["table_start_row"]
         cols = pos["cols"]
@@ -201,24 +242,24 @@ def fill_excel_template_from_bytes(template_bytes: bytes, patient: str, member: 
             # DESCRIPTION
             desc_col = cols.get("DESCRIPTION")
             if desc_col:
-                write_safe(ws, rowptr, desc_col, sr.get("SCAN") or "", append=False)
+                write_safe_cell(ws, rowptr, desc_col, sr.get("SCAN") or "", append=False)
             # TARRIF
             tcol = cols.get("TARRIF")
             if tcol:
-                write_safe(ws, rowptr, tcol, sr.get("TARIFF") if sr.get("TARIFF") is not None else "", append=False)
+                write_safe_cell(ws, rowptr, tcol, sr.get("TARIFF") if sr.get("TARIFF") is not None else "", append=False)
             # MOD
             mcol = cols.get("MOD")
             if mcol:
-                write_safe(ws, rowptr, mcol, sr.get("MODIFIER") or "", append=False)
+                write_safe_cell(ws, rowptr, mcol, sr.get("MODIFIER") or "", append=False)
             # QTY
             qcol = cols.get("QTY")
             if qcol:
-                write_safe(ws, rowptr, qcol, sr.get("QTY") if sr.get("QTY") is not None else "", append=False)
-            # FEES (amount per unit)
+                write_safe_cell(ws, rowptr, qcol, sr.get("QTY") if sr.get("QTY") is not None else "", append=False)
+            # FEES
             fcol = cols.get("FEES")
             if fcol:
-                # Use AMOUNT as fee-per-unit if that is what's expected, else calculate
-                write_safe(ws, rowptr, fcol, sr.get("AMOUNT") or "", append=False)
+                # write per-unit fee
+                write_safe_cell(ws, rowptr, fcol, sr.get("AMOUNT") or "", append=False)
             rowptr += 1
 
     buf = io.BytesIO()
@@ -240,10 +281,9 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Load & parse charge sheet when user clicks button (so they can edit uploads first)
+# Parse charge sheet when user clicks button
 if uploaded_charge and st.button("Load & Parse Charge Sheet"):
     try:
-        # read uploaded file into pandas
         parsed_df = load_charge_sheet(uploaded_charge)
         st.session_state.parsed_df = parsed_df
         st.success("Charge sheet parsed.")
@@ -251,15 +291,14 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
         st.error(f"Failed to parse charge sheet: {e}")
         st.stop()
 
-# If parsed, show selection UI
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
 
     if debug_mode:
         st.write("Parsed DataFrame columns:", df.columns.tolist())
-        st.dataframe(df.head(80))
+        st.dataframe(df.head(100))
 
-    # Build category/subcategory selectors
+    # categories/subcategories
     cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
     if not cats:
         subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())] if "SUBCATEGORY" in df.columns else []
@@ -281,7 +320,7 @@ if "parsed_df" in st.session_state:
             subsel = st.selectbox("Select Subcategory", subs)
             scans_for_sub = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == subsel)]
 
-    # Show scans and allow selection
+    # show scans and let user select
     if scans_for_sub.empty:
         st.warning("No scans available for the current selection.")
     else:
@@ -300,28 +339,29 @@ if "parsed_df" in st.session_state:
 
         if selected_rows:
             st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
+            # compute total using per-unit AMOUNT * QTY
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) * safe_int(r.get("QTY", 1), 1) for r in selected_rows])
             st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
-            # Generate only if template present
+            # Generate template if template uploaded
             if uploaded_template:
                 if st.button("Generate Quotation and Download Excel"):
                     try:
-                        # prepare scan_rows for writing: ensure AMOUNT is per-unit fee
+                        # Prepare scan_rows ensuring AMOUNT is per-unit fee
                         scan_rows_for_template = []
                         for r in selected_rows:
+                            # If charge sheet AMOUNT appears to be total for that line and QTY>1,
+                            # you can change below to per_unit = r['AMOUNT']/r['QTY']. Currently using AMOUNT as per-unit.
                             scan_rows_for_template.append({
                                 "SCAN": r.get("SCAN"),
                                 "TARIFF": int(r["TARIFF"]) if r.get("TARIFF") is not None else "",
                                 "MODIFIER": r.get("MODIFIER", ""),
                                 "QTY": safe_int(r.get("QTY"), 1),
-                                # Use AMOUNT as fee-per-unit — if your charge sheet stores total, you may need to divide by QTY
                                 "AMOUNT": safe_float(r.get("AMOUNT"), 0.0)
                             })
 
-                        # read uploaded template bytes
                         template_bytes = uploaded_template.read()
-                        out_buf = fill_excel_template_from_bytes(template_bytes, patient, member, provider, scan_rows_for_template)
+                        out_buf = fill_template_from_bytes(template_bytes, patient, member, provider, scan_rows_for_template)
 
                         st.download_button(
                             "Download Quotation (Excel)",
