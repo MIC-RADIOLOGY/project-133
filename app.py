@@ -110,16 +110,29 @@ def load_charge_sheet(file) -> pd.DataFrame:
     return pd.DataFrame(structured)
 
 # ---------- Excel template filler ----------
-def write_safe(ws, r, c, value):
+
+# NEW VERSION — keeps existing text & appends user entry
+def write_safe(ws, r, c, value, append=True):
     cell = ws.cell(row=r, column=c)
+
     try:
-        cell.value = value
+        if append and cell.value:
+            cell.value = f"{cell.value} {value}"
+        else:
+            cell.value = value
     except Exception:
+        # Handle merged cells
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 top = mr.coord.split(":")[0]
-                ws[top].value = value
+                top_cell = ws[top]
+
+                if append and top_cell.value:
+                    top_cell.value = f"{top_cell.value} {value}"
+                else:
+                    top_cell.value = value
                 return
+
 
 def find_template_positions(ws):
     pos = {}
@@ -143,31 +156,35 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
+
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
+    # Insert data while keeping the text in template
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
-        write_safe(ws, r, c, patient)
+        write_safe(ws, r, c, patient, append=True)
+
     if "member_cell" in pos:
         r, c = pos["member_cell"]
-        write_safe(ws, r, c, member)
+        write_safe(ws, r, c, member, append=True)
+
     if "provider_cell" in pos:
         r, c = pos["provider_cell"]
-        write_safe(ws, r, c, provider)
+        write_safe(ws, r, c, provider, append=True)
 
     if "table_start_row" in pos and "cols" in pos:
         rowptr = pos["table_start_row"]
         cols = pos["cols"]
 
         for sr in scan_rows:
-            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
-            write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
-            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
-            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
+            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"), append=False)
+            write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"), append=False)
+            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"), append=False)
+            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"), append=False)
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"), append=False)
             rowptr += 1
 
     buf = io.BytesIO()
