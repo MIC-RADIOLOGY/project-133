@@ -4,7 +4,6 @@ import openpyxl
 import io
 import math
 from typing import Optional
-from openpyxl.xml.functions import fromstring, tostring
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -98,30 +97,23 @@ def load_charge_sheet(file) -> pd.DataFrame:
     return pd.DataFrame(structured)
 
 # ----------------------------------------------------
-# SAFE WRITE to G22 without destroying diagonal line
+# SAFE WRITE to G22 without XML hacks
 # ----------------------------------------------------
 def safe_write_to_G22(ws, value):
     """
-    Writes value into G22 using XML injection so Excel shapes/lines are untouched.
-    openpyxl .value assignment clears drawing objects in merged regions.
+    Safely writes value into G22.
+    Handles merged cells by writing to the top-left cell.
     """
+    cell = ws['G22']
 
-    g22 = ws['G22']
+    for rng in ws.merged_cells.ranges:
+        if cell.coordinate in rng:
+            tl = rng.coord.split(":")[0]
+            ws[tl].value = value
+            return
 
-    # Access the XML element for this worksheet
-    tree = ws._element  # just this; no _sheets needed
-
-    # Find the <c r="G22"> node
-    for c in tree.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
-        if c.attrib.get("r") == "G22":
-            # Remove old value nodes
-            for child in list(c):
-                c.remove(child)
-
-            # Create new <v> node with number
-            v = fromstring(f"<v>{value}</v>")
-            c.append(v)
-            break
+    # Normal write
+    cell.value = value
 
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
@@ -215,7 +207,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         # Compute total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
 
-        # SAFE WRITE to G22 (XML-level)
+        # SAFE WRITE to G22 (merged-cell aware)
         safe_write_to_G22(ws, total_amt)
 
     buf = io.BytesIO()
@@ -224,7 +216,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Blue-Line Safe Version)")
+st.title("📄 Medical Quotation Generator (Safe G22)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
