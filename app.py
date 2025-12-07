@@ -96,25 +96,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
-# ----------------------------------------------------
-# SAFE WRITE to G22 without XML hacks
-# ----------------------------------------------------
-def safe_write_to_G22(ws, value):
-    """
-    Safely writes value into G22.
-    Handles merged cells by writing to the top-left cell.
-    """
-    cell = ws['G22']
-
-    for rng in ws.merged_cells.ranges:
-        if cell.coordinate in rng:
-            tl = rng.coord.split(":")[0]
-            ws[tl].value = value
-            return
-
-    # Normal write
-    cell.value = value
-
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
     cell = ws.cell(row=r, column=c)
@@ -170,21 +151,19 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     else:
         cell.value = new_value
 
-# ---------- Template Filler ----------
+# ---------- Template Filler (formula approach) ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Safe replacements
+    # Fill header info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
-
     if "member_cell" in pos:
         r, c = pos["member_cell"]
         replace_after_colon_in_same_cell(ws, r, c, member)
-
     if "provider_cell" in pos:
         r, c = pos["provider_cell"]
         replace_after_colon_in_same_cell(ws, r, c, provider)
@@ -195,7 +174,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         cols = pos["cols"]
 
         rowptr = start_row
-
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
@@ -204,19 +182,14 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Compute total
-        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-
-        # SAFE WRITE to G22 (merged-cell aware)
-        safe_write_to_G22(ws, total_amt)
-
+    # Do NOT write total; G22 has formula
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Safe G22)")
+st.title("📄 Medical Quotation Generator (Formula G22)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -283,7 +256,7 @@ if "parsed_df" in st.session_state:
         if selected_rows:
             st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
-            st.markdown(f"**Total Amount:** {total_amt:.2f}")
+            st.markdown(f"**Total Amount (for reference):** {total_amt:.2f}")
 
             if uploaded_template:
                 if st.button("Generate Quotation and Download Excel"):
