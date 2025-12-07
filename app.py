@@ -104,19 +104,14 @@ def safe_write_to_G22(ws, value):
     """
     Writes value into G22 using XML injection so Excel shapes/lines are untouched.
     openpyxl .value assignment clears drawing objects in merged regions.
-    This method avoids that entirely.
     """
 
-    # Locate the internal XML <c> node for G22
     g22 = ws['G22']
-    row = g22.row
-    col = g22.column_letter
 
-    # Access sheet XML tree
-    sheet = ws._parent._write_only if hasattr(ws._parent, "_write_only") else ws._parent
-    tree = sheet._sheets[ws.title]._element if hasattr(sheet, "_sheets") else ws._element
+    # Access the XML element for this worksheet
+    tree = ws._element  # just this; no _sheets needed
 
-    # Find matching <c r="G22"> node
+    # Find the <c r="G22"> node
     for c in tree.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
         if c.attrib.get("r") == "G22":
             # Remove old value nodes
@@ -124,10 +119,9 @@ def safe_write_to_G22(ws, value):
                 c.remove(child)
 
             # Create new <v> node with number
-            v = fromstring("<v>{}</v>".format(value))
+            v = fromstring(f"<v>{value}</v>")
             c.append(v)
             break
-
 
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
