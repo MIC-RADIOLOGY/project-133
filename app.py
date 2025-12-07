@@ -9,7 +9,8 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ---------- Config / heuristics ----------
 MAIN_CATEGORIES = {
-    "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN", "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
+    "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN",
+    "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
 }
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
@@ -95,6 +96,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
+
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
     cell = ws.cell(row=r, column=c)
@@ -114,13 +116,13 @@ def find_template_positions(ws):
             if cell.value:
                 t = u(cell.value)
                 if "PATIENT" in t and "patient_cell" not in pos:
-                    pos["patient_cell"] = (cell.row, cell.column + 1)
+                    pos["patient_cell"] = (cell.row, cell.column)
 
                 if "MEMBER" in t and "member_cell" not in pos:
-                    pos["member_cell"] = (cell.row, cell.column + 1)
+                    pos["member_cell"] = (cell.row, cell.column)
 
                 if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
-                    pos["provider_cell"] = (cell.row, cell.column + 1)
+                    pos["provider_cell"] = (cell.row, cell.column)
 
                 headers = ["DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
                 if any(h in t for h in headers) and "cols" not in pos:
@@ -132,31 +134,54 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-# ---------- Template Filler (TOTAL written safely without breaking BLUE LINE) ----------
+
+# ---------- Replace text inside merged label cells ----------
+def replace_after_colon_in_same_cell(ws, row, col, new_value):
+    """Safely edits only the part after ':' inside the SAME merged cell."""
+    cell = ws.cell(row=row, column=col)
+
+    # Find merged top-left
+    for rng in ws.merged_cells.ranges:
+        if cell.coordinate in rng:
+            tl = rng.coord.split(":")[0]
+            cell = ws[tl]
+            break
+
+    old = str(cell.value) if cell.value else ""
+
+    if ":" in old:
+        left = old.split(":", 1)[0]        # keep FOR PATIENT / MEMBER NUMBER
+        cell.value = f"{left}: {new_value}"
+    else:
+        cell.value = new_value
+
+
+# ---------- Template Filler ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill header data
+    # FIXED: Replace inside same merged cell
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
-        write_safe(ws, r, c, patient)
+        replace_after_colon_in_same_cell(ws, r, c, patient)
+
     if "member_cell" in pos:
         r, c = pos["member_cell"]
-        write_safe(ws, r, c, member)
+        replace_after_colon_in_same_cell(ws, r, c, member)
+
     if "provider_cell" in pos:
         r, c = pos["provider_cell"]
-        write_safe(ws, r, c, provider)
+        replace_after_colon_in_same_cell(ws, r, c, provider)
 
-    # Fill table + TOTAL
+    # Fill table
     if "table_start_row" in pos and "cols" in pos:
         start_row = pos["table_start_row"]
         cols = pos["cols"]
 
         rowptr = start_row
 
-        # Write selected scans
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
@@ -168,7 +193,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         # Compute total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
 
-        # ---- BLUE LINE SAFE WRITE ----
+        # SAFE write to blue line target
         target_coord = "G22"
         target_cell = ws[target_coord]
 
@@ -182,7 +207,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             ws[merged_top_left].value = total_amt
         else:
             ws[target_coord].value = total_amt
-        # --------------------------------
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -191,7 +215,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Final)")
+st.title("📄 Medical Quotation Generator (Final Fixed Version)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -224,7 +248,7 @@ if "parsed_df" in st.session_state:
     if not cats:
         subs = [s for s in sorted(df["SUBCATEGORY"].dropna().unique())] if "SUBCATEGORY" in df.columns else []
         if subs:
-            st.warning("No main categories detected; choose a Subcategory instead.")
+            st.warning("No main categories; choose a subcategory instead.")
             subsel = st.selectbox("Select Subcategory", subs)
             scans_for_sub = df[df["SUBCATEGORY"] == subsel]
         else:
@@ -242,14 +266,14 @@ if "parsed_df" in st.session_state:
             scans_for_sub = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == subsel)]
 
     if scans_for_sub.empty:
-        st.warning("No scans available for the current selection.")
+        st.warning("No scans available.")
     else:
         scans_for_sub = scans_for_sub.reset_index(drop=True)
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
         )
         sel_indices = st.multiselect(
-            "Select scans to add to quotation (you can select multiple)",
+            "Select scans",
             options=list(range(len(scans_for_sub))),
             format_func=lambda i: scans_for_sub.at[i, "label"]
         )
@@ -270,8 +294,9 @@ if "parsed_df" in st.session_state:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
-                st.info("Upload a quotation template to enable download.")
+                st.info("Upload a template to enable download.")
         else:
-            st.info("No scans selected yet. Choose scans to add to the quotation.")
+            st.info("Select scans first.")
 else:
-    st.info("Upload a charge sheet to begin parsing.")
+    st.info("Upload a charge sheet to begin.")
+
