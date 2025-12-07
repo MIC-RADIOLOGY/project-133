@@ -159,6 +159,18 @@ def write_total_to_G22(ws, total_amt):
                 ws[top_left].value = total_amt
                 break
 
+# ---------- Write subtotal to G41 ----------
+def write_subtotal_to_G41(ws, subtotal_amt):
+    cell = ws['G41']
+    try:
+        cell.value = subtotal_amt
+    except:
+        for mr in ws.merged_cells.ranges:
+            if cell.coordinate in mr:
+                top_left = mr.coord.split(":")[0]
+                ws[top_left].value = subtotal_amt
+                break
+
 # ---------- Write total to "Total" row if present ----------
 def write_total_row(ws, total_amt):
     for row in ws.iter_rows(min_row=1, max_row=300):
@@ -199,10 +211,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Write total to G22
+        # Calculate total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_total_to_G22(ws, total_amt)
-        write_total_row(ws, total_amt)  # Ensure template "Total" row matches
+        write_total_to_G22(ws, total_amt)      # G22
+        write_subtotal_to_G41(ws, total_amt)   # G41
+        write_total_row(ws, total_amt)         # "Total" row in template
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -210,7 +223,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Total in G22)")
+st.title("📄 Medical Quotation Generator (Total in G22 & Subtotal in G41)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
