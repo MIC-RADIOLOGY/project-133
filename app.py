@@ -3,6 +3,7 @@ import pandas as pd
 import openpyxl
 import io
 from copy import copy
+from openpyxl.styles import Border, Side
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -146,23 +147,27 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     else:
         cell.value = new_value
 
-def write_merged_cell(ws, cell_address, value):
+# ---------- Write to merged/unmerged cells preserving borders ----------
+def write_value_preserve_borders(ws, cell_address, value):
     """
-    Safely write to a merged or unmerged cell while preserving all formatting.
+    Write to a merged or unmerged cell without losing borders.
+    Temporarily unmerges merged cells, writes value, reapplies formatting, then remerges.
     """
     cell = ws[cell_address]
+    merged_range = None
 
-    # Check for merged ranges
+    # Check if in merged range
     for mr in ws.merged_cells.ranges:
         if cell.coordinate in mr:
-            top_left = mr.coord.split(":")[0]
-            cell = ws[top_left]
+            merged_range = mr
+            cell = ws[mr.coord.split(":")[0]]  # top-left
+            ws.unmerge_cells(str(mr))
             break
 
     # Preserve styles
     border = copy(cell.border)
-    fill = copy(cell.fill)
     font = copy(cell.font)
+    fill = copy(cell.fill)
     alignment = copy(cell.alignment)
 
     # Write value
@@ -170,22 +175,13 @@ def write_merged_cell(ws, cell_address, value):
 
     # Reapply styles
     cell.border = border
-    cell.fill = fill
     cell.font = font
+    cell.fill = fill
     cell.alignment = alignment
 
-def write_total_to_G22(ws, total_amt):
-    write_merged_cell(ws, 'G22', total_amt)
-
-def write_subtotal_to_G41(ws, subtotal_amt):
-    write_merged_cell(ws, 'G41', subtotal_amt)
-
-def write_total_row(ws, total_amt):
-    for row in ws.iter_rows(min_row=1, max_row=300):
-        for cell in row:
-            if cell.value and str(cell.value).strip().upper() == "TOTAL":
-                write_merged_cell(ws, f"G{cell.row}", total_amt)
-                return
+    # Re-merge if needed
+    if merged_range:
+        ws.merge_cells(str(merged_range))
 
 # ---------- Fill Template ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -218,10 +214,17 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
+        # Total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_total_to_G22(ws, total_amt)
-        write_subtotal_to_G41(ws, total_amt)
-        write_total_row(ws, total_amt)
+        write_value_preserve_borders(ws, "G22", total_amt)  # Total
+        write_value_preserve_borders(ws, "G41", total_amt)  # Subtotal
+
+        # Template "TOTAL" row (if present)
+        for row in ws.iter_rows(min_row=1, max_row=300):
+            for cell in row:
+                if cell.value and str(cell.value).strip().upper() == "TOTAL":
+                    write_value_preserve_borders(ws, f"G{cell.row}", total_amt)
+                    break
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -229,7 +232,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Totals Preserve Borders)")
+st.title("📄 Medical Quotation Generator (Merged Totals Preserve Borders)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
