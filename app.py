@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
-from typing import Optional
+from copy import copy
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -95,7 +95,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
-# ---------- Excel Template Mapping ----------
+# ---------- Excel Template Helpers ----------
 def write_safe(ws, r, c, value):
     cell = ws.cell(row=r, column=c)
     try:
@@ -132,7 +132,6 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-# ---------- Replace text inside merged label cells ----------
 def replace_after_colon_in_same_cell(ws, row, col, new_value):
     cell = ws.cell(row=row, column=col)
     for rng in ws.merged_cells.ranges:
@@ -147,51 +146,48 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     else:
         cell.value = new_value
 
-# ---------- Write value preserving formatting ----------
-def write_preserve_style(cell, value):
-    from copy import copy
-    # Preserve existing styles
+def write_merged_cell(ws, cell_address, value):
+    """
+    Safely write to a merged or unmerged cell while preserving all formatting.
+    """
+    cell = ws[cell_address]
+
+    # Check for merged ranges
+    for mr in ws.merged_cells.ranges:
+        if cell.coordinate in mr:
+            top_left = mr.coord.split(":")[0]
+            cell = ws[top_left]
+            break
+
+    # Preserve styles
     border = copy(cell.border)
-    font = copy(cell.font)
     fill = copy(cell.fill)
+    font = copy(cell.font)
     alignment = copy(cell.alignment)
+
+    # Write value
     cell.value = value
+
+    # Reapply styles
     cell.border = border
-    cell.font = font
     cell.fill = fill
+    cell.font = font
     cell.alignment = alignment
 
 def write_total_to_G22(ws, total_amt):
-    cell = ws['G22']
-    try:
-        write_preserve_style(cell, total_amt)
-    except:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                top_left = mr.coord.split(":")[0]
-                write_preserve_style(ws[top_left], total_amt)
-                break
+    write_merged_cell(ws, 'G22', total_amt)
 
 def write_subtotal_to_G41(ws, subtotal_amt):
-    cell = ws['G41']
-    try:
-        write_preserve_style(cell, subtotal_amt)
-    except:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                top_left = mr.coord.split(":")[0]
-                write_preserve_style(ws[top_left], subtotal_amt)
-                break
+    write_merged_cell(ws, 'G41', subtotal_amt)
 
 def write_total_row(ws, total_amt):
     for row in ws.iter_rows(min_row=1, max_row=300):
         for cell in row:
             if cell.value and str(cell.value).strip().upper() == "TOTAL":
-                ws.cell(row=cell.row, column=7)  # Column G
-                write_preserve_style(ws.cell(row=cell.row, column=7), total_amt)
+                write_merged_cell(ws, f"G{cell.row}", total_amt)
                 return
 
-# ---------- Template Filler ----------
+# ---------- Fill Template ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
@@ -222,11 +218,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Calculate total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_total_to_G22(ws, total_amt)      # G22
-        write_subtotal_to_G41(ws, total_amt)   # G41
-        write_total_row(ws, total_amt)         # Template "Total" row
+        write_total_to_G22(ws, total_amt)
+        write_subtotal_to_G41(ws, total_amt)
+        write_total_row(ws, total_amt)
 
     buf = io.BytesIO()
     wb.save(buf)
