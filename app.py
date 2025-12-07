@@ -4,6 +4,7 @@ import openpyxl
 import io
 import math
 from typing import Optional
+from openpyxl.xml.functions import fromstring, tostring
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -96,6 +97,37 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
+# ----------------------------------------------------
+# SAFE WRITE to G22 without destroying diagonal line
+# ----------------------------------------------------
+def safe_write_to_G22(ws, value):
+    """
+    Writes value into G22 using XML injection so Excel shapes/lines are untouched.
+    openpyxl .value assignment clears drawing objects in merged regions.
+    This method avoids that entirely.
+    """
+
+    # Locate the internal XML <c> node for G22
+    g22 = ws['G22']
+    row = g22.row
+    col = g22.column_letter
+
+    # Access sheet XML tree
+    sheet = ws._parent._write_only if hasattr(ws._parent, "_write_only") else ws._parent
+    tree = sheet._sheets[ws.title]._element if hasattr(sheet, "_sheets") else ws._element
+
+    # Find matching <c r="G22"> node
+    for c in tree.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+        if c.attrib.get("r") == "G22":
+            # Remove old value nodes
+            for child in list(c):
+                c.remove(child)
+
+            # Create new <v> node with number
+            v = fromstring("<v>{}</v>".format(value))
+            c.append(v)
+            break
+
 
 # ---------- Excel Template Mapping ----------
 def write_safe(ws, r, c, value):
@@ -134,13 +166,10 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-
 # ---------- Replace text inside merged label cells ----------
 def replace_after_colon_in_same_cell(ws, row, col, new_value):
-    """Safely edits only the part after ':' inside the SAME merged cell."""
     cell = ws.cell(row=row, column=col)
 
-    # Find merged top-left
     for rng in ws.merged_cells.ranges:
         if cell.coordinate in rng:
             tl = rng.coord.split(":")[0]
@@ -150,11 +179,10 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     old = str(cell.value) if cell.value else ""
 
     if ":" in old:
-        left = old.split(":", 1)[0]        # keep FOR PATIENT / MEMBER NUMBER
+        left = old.split(":", 1)[0]
         cell.value = f"{left}: {new_value}"
     else:
         cell.value = new_value
-
 
 # ---------- Template Filler ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -162,7 +190,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # FIXED: Replace inside same merged cell
+    # Safe replacements
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
@@ -193,29 +221,16 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         # Compute total
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
 
-        # SAFE write to blue line target
-        target_coord = "G22"
-        target_cell = ws[target_coord]
-
-        merged_top_left = None
-        for rng in ws.merged_cells.ranges:
-            if target_cell.coordinate in rng:
-                merged_top_left = rng.coord.split(":")[0]
-                break
-
-        if merged_top_left:
-            ws[merged_top_left].value = total_amt
-        else:
-            ws[target_coord].value = total_amt
+        # SAFE WRITE to G22 (XML-level)
+        safe_write_to_G22(ws, total_amt)
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
-
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Final Fixed Version)")
+st.title("📄 Medical Quotation Generator (Blue-Line Safe Version)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -299,4 +314,3 @@ if "parsed_df" in st.session_state:
             st.info("Select scans first.")
 else:
     st.info("Upload a charge sheet to begin.")
-
