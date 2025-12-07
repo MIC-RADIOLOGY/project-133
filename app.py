@@ -68,7 +68,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
                 "SUBCATEGORY": current_subcategory,
                 "SCAN": "FF",
                 "TARIFF": safe_float(r["B_TARIFF"], None),
-                "MODIFIER": "",
+                "MODIFIER": clean_text(r["C_MOD"]),
                 "QTY": safe_int(r["D_QTY"], 1),
                 "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
             })
@@ -147,39 +147,30 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     else:
         cell.value = new_value
 
-# ---------- Write to merged/unmerged cells preserving borders ----------
 def write_value_preserve_borders(ws, cell_address, value):
-    """
-    Write to a merged or unmerged cell without losing borders.
-    Temporarily unmerges merged cells, writes value, reapplies formatting, then remerges.
-    """
     cell = ws[cell_address]
     merged_range = None
 
-    # Check if in merged range
     for mr in ws.merged_cells.ranges:
         if cell.coordinate in mr:
             merged_range = mr
-            cell = ws[mr.coord.split(":")[0]]  # top-left
+            cell = ws[mr.coord.split(":")[0]]
             ws.unmerge_cells(str(mr))
             break
 
-    # Preserve styles
+    from copy import copy
     border = copy(cell.border)
     font = copy(cell.font)
     fill = copy(cell.fill)
     alignment = copy(cell.alignment)
 
-    # Write value
     cell.value = value
 
-    # Reapply styles
     cell.border = border
     cell.font = font
     cell.fill = fill
     cell.alignment = alignment
 
-    # Re-merge if needed
     if merged_range:
         ws.merge_cells(str(merged_range))
 
@@ -189,7 +180,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill header info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
@@ -200,7 +190,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         r, c = pos["provider_cell"]
         replace_after_colon_in_same_cell(ws, r, c, provider)
 
-    # Fill table
     if "table_start_row" in pos and "cols" in pos:
         start_row = pos["table_start_row"]
         cols = pos["cols"]
@@ -209,17 +198,22 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
-            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
+
+            # Write modifier only if it exists
+            mod_value = sr.get("MODIFIER")
+            if mod_value:
+                write_safe(ws, rowptr, cols.get("MOD"), mod_value)
+
             write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Total
+        # Total / Subtotal
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_value_preserve_borders(ws, "G22", total_amt)  # Total
-        write_value_preserve_borders(ws, "G41", total_amt)  # Subtotal
+        write_value_preserve_borders(ws, "G22", total_amt)
+        write_value_preserve_borders(ws, "G41", total_amt)
 
-        # Template "TOTAL" row (if present)
+        # Update any "TOTAL" cells in template
         for row in ws.iter_rows(min_row=1, max_row=300):
             for cell in row:
                 if cell.value and str(cell.value).strip().upper() == "TOTAL":
@@ -232,7 +226,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Merged Totals Preserve Borders)")
+st.title("📄 Medical Quotation Generator (Modifiers & Totals)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -286,8 +280,9 @@ if "parsed_df" in st.session_state:
         st.warning("No scans available.")
     else:
         scans_for_sub = scans_for_sub.reset_index(drop=True)
+        # Include modifier in the selection label
         scans_for_sub["label"] = scans_for_sub.apply(
-            lambda r: f"{r['SCAN']}  | Tariff: {r['TARIFF']}  | Amt: {r['AMOUNT']}", axis=1
+            lambda r: f"{r['SCAN']} | Tariff: {r['TARIFF']} | Mod: {r['MODIFIER']} | Amt: {r['AMOUNT']}", axis=1
         )
         sel_indices = st.multiselect(
             "Select scans",
