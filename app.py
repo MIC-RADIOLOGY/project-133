@@ -135,15 +135,12 @@ def find_template_positions(ws):
 # ---------- Replace text inside merged label cells ----------
 def replace_after_colon_in_same_cell(ws, row, col, new_value):
     cell = ws.cell(row=row, column=col)
-
     for rng in ws.merged_cells.ranges:
         if cell.coordinate in rng:
             tl = rng.coord.split(":")[0]
             cell = ws[tl]
             break
-
     old = str(cell.value) if cell.value else ""
-
     if ":" in old:
         left = old.split(":", 1)[0]
         cell.value = f"{left}: {new_value}"
@@ -156,12 +153,20 @@ def write_total_to_G22(ws, total_amt):
     try:
         cell.value = total_amt
     except:
-        # handle merged cell
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 top_left = mr.coord.split(":")[0]
                 ws[top_left].value = total_amt
                 break
+
+# ---------- Write total to "Total" row if present ----------
+def write_total_row(ws, total_amt):
+    for row in ws.iter_rows(min_row=1, max_row=300):
+        for cell in row:
+            if cell.value and str(cell.value).strip().upper() == "TOTAL":
+                # Assuming the amount is in column G (7)
+                ws.cell(row=cell.row, column=7).value = total_amt
+                return
 
 # ---------- Template Filler ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -197,6 +202,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         # Write total to G22
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
         write_total_to_G22(ws, total_amt)
+        write_total_row(ws, total_amt)  # Ensure template "Total" row matches
 
     buf = io.BytesIO()
     wb.save(buf)
