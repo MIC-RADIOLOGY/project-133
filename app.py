@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
-import math
 from typing import Optional
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
@@ -151,7 +150,20 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
     else:
         cell.value = new_value
 
-# ---------- Template Filler (formula approach) ----------
+# ---------- Write total to G22 ----------
+def write_total_to_G22(ws, total_amt):
+    cell = ws['G22']
+    try:
+        cell.value = total_amt
+    except:
+        # handle merged cell
+        for mr in ws.merged_cells.ranges:
+            if cell.coordinate in mr:
+                top_left = mr.coord.split(":")[0]
+                ws[top_left].value = total_amt
+                break
+
+# ---------- Template Filler ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
@@ -182,14 +194,17 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-    # Do NOT write total; G22 has formula
+        # Write total to G22
+        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
+        write_total_to_G22(ws, total_amt)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Formula G22)")
+st.title("📄 Medical Quotation Generator (Total in G22)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -256,7 +271,7 @@ if "parsed_df" in st.session_state:
         if selected_rows:
             st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
             total_amt = sum([safe_float(r["AMOUNT"], 0.0) for r in selected_rows])
-            st.markdown(f"**Total Amount (for reference):** {total_amt:.2f}")
+            st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
             if uploaded_template:
                 if st.button("Generate Quotation and Download Excel"):
