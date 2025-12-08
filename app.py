@@ -96,8 +96,11 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
+# ---------- Excel Template Helpers ----------
+# (same as previous fill_excel_template, write_safe, write_value_preserve_borders, etc.)
+
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — Category / Tariff Selection (MRI supported)")
+st.title("Medical Quotation Generator — Auto-Generate Excel")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -143,7 +146,7 @@ if "parsed_df" in st.session_state:
                 selected_indices = st.multiselect("Select Tariffs", options=list(range(len(scans_for_cat))),
                                                 format_func=lambda i: scans_for_cat.at[i, "label"])
 
-                # Auto-add selected tariffs without add button
+                # Auto-add selected tariffs
                 st.session_state.selected_rows = [scans_for_cat.iloc[i].to_dict() for i in selected_indices]
 
     st.subheader("Selected Items")
@@ -152,5 +155,15 @@ if "parsed_df" in st.session_state:
         st.dataframe(sel_df[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]].reset_index(drop=True))
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
         st.markdown(f"**Total Amount:** {total_amt:.2f}")
+
+        # Automatically prepare download button for Excel
+        if uploaded_template:
+            out = fill_excel_template(uploaded_template, patient, member, provider, st.session_state.selected_rows)
+            st.download_button(
+                "Download Quotation (Auto-Generated)",
+                data=out,
+                file_name=f"quotation_{(patient or 'patient').replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     else:
         st.info("Select tariffs from the list above.")
