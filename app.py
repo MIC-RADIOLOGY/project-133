@@ -288,7 +288,9 @@ if "parsed_df" in st.session_state:
             else:
                 scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
 
-            st.session_state.selected_rows = scans_for_cat.to_dict(orient="records")
+            # Exclude FF entries from the quotation
+            scans_filtered = scans_for_cat[scans_for_cat["SCAN"] != "FF"]
+            st.session_state.selected_rows = scans_filtered.to_dict(orient="records")
 
     st.markdown("---")
     st.subheader("Selected Items")
