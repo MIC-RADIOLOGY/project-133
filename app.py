@@ -10,7 +10,8 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 # ---------- Config / heuristics ----------
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN",
-    "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
+    "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
+    "MRI", "MRI SCAN"
 }
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
@@ -57,6 +58,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
         exam_u = exam.upper()
 
+        # NEW CATEGORY HANDLING INCLUDING MRI
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
@@ -158,7 +160,6 @@ def write_value_preserve_borders(ws, cell_address, value):
             ws.unmerge_cells(str(mr))
             break
 
-    from copy import copy
     border = copy(cell.border)
     font = copy(cell.font)
     fill = copy(cell.fill)
@@ -199,7 +200,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
 
-            # Write modifier only if it exists
             mod_value = sr.get("MODIFIER")
             if mod_value:
                 write_safe(ws, rowptr, cols.get("MOD"), mod_value)
@@ -208,12 +208,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
             rowptr += 1
 
-        # Total / Subtotal
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
         write_value_preserve_borders(ws, "G22", total_amt)
         write_value_preserve_borders(ws, "G41", total_amt)
 
-        # Update any "TOTAL" cells in template
         for row in ws.iter_rows(min_row=1, max_row=300):
             for cell in row:
                 if cell.value and str(cell.value).strip().upper() == "TOTAL":
@@ -226,7 +224,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("📄 Medical Quotation Generator (Modifiers & Totals)")
+st.title("Medical Quotation Generator (Modifiers & Totals)")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -280,7 +278,6 @@ if "parsed_df" in st.session_state:
         st.warning("No scans available.")
     else:
         scans_for_sub = scans_for_sub.reset_index(drop=True)
-        # Include modifier in the selection label
         scans_for_sub["label"] = scans_for_sub.apply(
             lambda r: f"{r['SCAN']} | Tariff: {r['TARIFF']} | Mod: {r['MODIFIER']} | Amt: {r['AMOUNT']}", axis=1
         )
