@@ -3,7 +3,7 @@ import pandas as pd
 import openpyxl
 import io
 from copy import copy
-from typing import Optional
+from datetime import datetime
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -13,7 +13,7 @@ MAIN_CATEGORIES = {
     "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
     "MRI"
 }
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "FF", ""}
 
 # ---------- Helpers ----------
 def clean_text(x) -> str:
@@ -60,18 +60,6 @@ def load_charge_sheet(file) -> pd.DataFrame:
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
-            continue
-
-        if exam_u == "FF":
-            structured.append({
-                "CATEGORY": current_category,
-                "SUBCATEGORY": current_subcategory,
-                "SCAN": "FF",
-                "TARIFF": safe_float(r["B_TARIFF"], None),
-                "MODIFIER": clean_text(r["C_MOD"]),
-                "QTY": safe_int(r["D_QTY"], 1),
-                "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
-            })
             continue
 
         if exam_u in GARBAGE_KEYS:
@@ -126,6 +114,8 @@ def find_template_positions(ws):
                     pos["member_cell"] = (cell.row, cell.column)
                 if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
                     pos["provider_cell"] = (cell.row, cell.column)
+                if "DATE" in t and "date_cell" not in pos:
+                    pos["date_cell"] = (cell.row, cell.column)
 
                 headers = ["DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
                 if any(h in t for h in headers) and "cols" not in pos:
@@ -190,6 +180,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     if "provider_cell" in pos:
         r, c = pos["provider_cell"]
         replace_after_colon_in_same_cell(ws, r, c, provider)
+    if "date_cell" in pos:
+        r, c = pos["date_cell"]
+        today_str = datetime.now().strftime("%d/%m/%Y")
+        replace_after_colon_in_same_cell(ws, r, c, today_str)
 
     if "table_start_row" in pos and "cols" in pos:
         start_row = pos["table_start_row"]
@@ -249,7 +243,6 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Load & parse charge sheet
 if uploaded_charge:
     if st.button("Load & Parse Charge Sheet"):
         try:
@@ -288,8 +281,8 @@ if "parsed_df" in st.session_state:
             else:
                 scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
 
-            # Exclude FF entries from the quotation
-            scans_filtered = scans_for_cat[scans_for_cat["SCAN"] != "FF"]
+            # Keep only scan rows (no FF or garbage)
+            scans_filtered = scans_for_cat[~scans_for_cat["SCAN"].isin(GARBAGE_KEYS)]
             st.session_state.selected_rows = scans_filtered.to_dict(orient="records")
 
     st.markdown("---")
@@ -306,27 +299,16 @@ if "parsed_df" in st.session_state:
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
         st.markdown(f"**Total Amount:** {total_amt:.2f}")
 
-        colr1, colr2, colr3 = st.columns([1,1,1])
-        with colr1:
-            if st.button("Remove Last"):
-                if st.session_state.selected_rows:
-                    removed = st.session_state.selected_rows.pop()
-                    st.warning(f"Removed: {removed.get('SCAN')}")
-        with colr2:
-            if st.button("Clear All"):
-                st.session_state.selected_rows = []
-                st.success("Cleared selected items.")
-        with colr3:
-            if uploaded_template and st.button("Generate Quotation and Download Excel"):
-                try:
-                    out = fill_excel_template(uploaded_template, patient, member, provider, st.session_state.selected_rows)
-                    st.download_button(
-                        "Download Quotation",
-                        data=out,
-                        file_name=f"quotation_{(patient or 'patient').replace(' ', '_')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                except Exception as e:
-                    st.error(f"Failed to generate quotation: {e}")
+        if uploaded_template and st.button("Generate Quotation and Download Excel"):
+            try:
+                out = fill_excel_template(uploaded_template, patient, member, provider, st.session_state.selected_rows)
+                st.download_button(
+                    "Download Quotation",
+                    data=out,
+                    file_name=f"quotation_{(patient or 'patient').replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"Failed to generate quotation: {e}")
 else:
     st.info("Upload a charge sheet to begin.")
