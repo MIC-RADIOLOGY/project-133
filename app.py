@@ -13,7 +13,7 @@ MAIN_CATEGORIES = {
     "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
     "MRI"
 }
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "FF", ""}
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "FF", "", "CONSUMABLES"}
 
 # ---------- Helpers ----------
 def clean_text(x) -> str:
@@ -183,7 +183,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     if "date_cell" in pos:
         r, c = pos["date_cell"]
         today_str = datetime.now().strftime("%d/%m/%Y")
-        replace_after_colon_in_same_cell(ws, r, c, today_str)
+        ws.cell(row=r+1, column=c, value=today_str)  # write date below the DATE cell
 
     if "table_start_row" in pos and "cols" in pos:
         start_row = pos["table_start_row"]
@@ -191,7 +191,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         rowptr = start_row
         for sr in scan_rows:
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
-            write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARIFF"))
+            write_safe(ws, rowptr, cols.get("TARRIF"), sr.get("TARRIF"))
             mod_value = sr.get("MODIFIER")
             if mod_value:
                 write_safe(ws, rowptr, cols.get("MOD"), mod_value)
@@ -232,7 +232,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — Category / Tariff Selection (MRI supported)")
+st.title("Medical Quotation Generator — Real Scans Only")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -281,19 +281,22 @@ if "parsed_df" in st.session_state:
             else:
                 scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
 
-            # Keep only scan rows (no FF or garbage)
-            scans_filtered = scans_for_cat[~scans_for_cat["SCAN"].isin(GARBAGE_KEYS)]
+            # Keep only real scans (exclude garbage/headers)
+            scans_filtered = scans_for_cat[
+                (~scans_for_cat["SCAN"].isin(GARBAGE_KEYS)) &
+                (scans_for_cat["SCAN"].notna())
+            ]
             st.session_state.selected_rows = scans_filtered.to_dict(orient="records")
 
     st.markdown("---")
-    st.subheader("Selected Items")
+    st.subheader("Selected Scans")
     if "selected_rows" not in st.session_state or len(st.session_state.selected_rows) == 0:
-        st.info("No tariffs available in this category/subcategory.")
-        selected_df = pd.DataFrame(columns=["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"])
+        st.info("No real scans available in this category/subcategory.")
+        selected_df = pd.DataFrame(columns=["SCAN", "TARRIF", "MODIFIER", "QTY", "AMOUNT"])
         st.dataframe(selected_df)
     else:
         sel_df = pd.DataFrame(st.session_state.selected_rows)
-        display_df = sel_df[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]]
+        display_df = sel_df[["SCAN", "TARRIF", "MODIFIER", "QTY", "AMOUNT"]]
         st.dataframe(display_df.reset_index(drop=True))
 
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
