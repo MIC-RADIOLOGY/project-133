@@ -13,7 +13,7 @@ MAIN_CATEGORIES = {
     "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
     "MRI"
 }
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "FF", "", "CONSUMABLES"}
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "", "CONSUMABLES"}
 
 # ---------- Helpers ----------
 def clean_text(x) -> str:
@@ -57,12 +57,11 @@ def load_charge_sheet(file) -> pd.DataFrame:
             continue
 
         exam_u = exam.upper()
+
+        # Main category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
-            continue
-
-        if exam_u in GARBAGE_KEYS:
             continue
 
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
@@ -73,7 +72,24 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Only real scan rows
+        # MRI-specific FF rows: include under subcategory
+        if exam_u == "FF" and current_category == "MRI" and current_subcategory is not None:
+            structured.append({
+                "CATEGORY": current_category,
+                "SUBCATEGORY": current_subcategory,
+                "SCAN": current_subcategory,  # Use subcategory name
+                "TARIFF": safe_float(r["B_TARIFF"], None),
+                "MODIFIER": clean_text(r["C_MOD"]),
+                "QTY": safe_int(r["D_QTY"], 1),
+                "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
+            })
+            continue
+
+        # Skip garbage for other categories
+        if exam_u in GARBAGE_KEYS:
+            continue
+
+        # Real scan rows
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -232,7 +248,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — Real Scans Only")
+st.title("Medical Quotation Generator — MRI FF Fix")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -295,11 +311,11 @@ if "parsed_df" in st.session_state:
     st.subheader("Selected Scans")
     if "selected_rows" not in st.session_state or len(st.session_state.selected_rows) == 0:
         st.info("No real scans available in this category/subcategory.")
-        selected_df = pd.DataFrame(columns=["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"])
+        selected_df = pd.DataFrame(columns=["SCAN", "TARRIF", "MODIFIER", "QTY", "AMOUNT"])
         st.dataframe(selected_df)
     else:
         sel_df = pd.DataFrame(st.session_state.selected_rows)
-        display_df = sel_df[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]]
+        display_df = sel_df[["SCAN", "TARRIF", "MODIFIER", "QTY", "AMOUNT"]]
         st.dataframe(display_df.reset_index(drop=True))
 
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
