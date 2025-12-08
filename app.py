@@ -68,10 +68,12 @@ def load_charge_sheet(file) -> pd.DataFrame:
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
         amt_blank = pd.isna(r["E_AMOUNT"]) or str(r["E_AMOUNT"]).strip() in ["", "nan", "NaN", "None"]
 
+        # Subcategory header
         if tariff_blank and amt_blank:
             current_subcategory = exam
             continue
 
+        # Only real scan rows
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -92,7 +94,6 @@ def write_safe(ws, r, c, value):
         cell = ws.cell(row=r, column=c)
     except Exception:
         return
-
     try:
         cell.value = value
     except Exception:
@@ -149,7 +150,6 @@ def write_value_preserve_borders(ws, cell_address, value):
             cell = ws[mr.coord.split(":")[0]]
             ws.unmerge_cells(str(mr))
             break
-
     border = copy(cell.border)
     font = copy(cell.font)
     fill = copy(cell.fill)
@@ -279,9 +279,12 @@ if "parsed_df" in st.session_state:
             if sub_sel == "-- all --":
                 scans_for_cat = df[df["CATEGORY"] == main_sel].reset_index(drop=True)
             else:
-                scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
+                scans_for_cat = df[
+                    (df["CATEGORY"] == main_sel) &
+                    (df["SUBCATEGORY"] == sub_sel)
+                ].reset_index(drop=True)
 
-            # Keep only real scans (exclude garbage/headers)
+            # Keep only real scans
             scans_filtered = scans_for_cat[
                 (~scans_for_cat["SCAN"].isin(GARBAGE_KEYS)) &
                 (scans_for_cat["SCAN"].notna())
