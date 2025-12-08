@@ -13,7 +13,7 @@ MAIN_CATEGORIES = {
     "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
     "MRI"
 }
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", "", "CONSUMABLES"}
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 # ---------- Helpers ----------
 def clean_text(x) -> str:
@@ -55,41 +55,26 @@ def load_charge_sheet(file) -> pd.DataFrame:
         exam = clean_text(r["A_EXAM"])
         if exam == "":
             continue
-
         exam_u = exam.upper()
 
-        # Main category
+        # Detect main category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
+        # Subcategory header (tariff & amount blank)
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
         amt_blank = pd.isna(r["E_AMOUNT"]) or str(r["E_AMOUNT"]).strip() in ["", "nan", "NaN", "None"]
-
-        # Subcategory header
         if tariff_blank and amt_blank:
             current_subcategory = exam
             continue
 
-        # MRI-specific FF rows: include under subcategory
-        if exam_u == "FF" and current_category == "MRI" and current_subcategory is not None:
-            structured.append({
-                "CATEGORY": current_category,
-                "SUBCATEGORY": current_subcategory,
-                "SCAN": current_subcategory,  # Use subcategory name
-                "TARIFF": safe_float(r["B_TARIFF"], None),
-                "MODIFIER": clean_text(r["C_MOD"]),
-                "QTY": safe_int(r["D_QTY"], 1),
-                "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
-            })
-            continue
-
-        # Skip garbage for other categories
+        # Skip completely empty or garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Real scan rows
+        # Include all lines: scans, FF, consumables
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -133,12 +118,10 @@ def find_template_positions(ws):
                     pos["provider_cell"] = (cell.row, cell.column)
                 if "DATE" in t and "date_cell" not in pos:
                     pos["date_cell"] = (cell.row, cell.column)
-
                 headers = ["DESCRIPTION", "TARIFF", "MOD", "QTY", "FEES", "AMOUNT"]
                 if any(h in t for h in headers) and "cols" not in pos:
                     pos["cols"] = {}
                     pos["table_start_row"] = cell.row + 1
-
                 for h in headers:
                     if h in t:
                         pos.setdefault("cols", {})[h] = cell.column
@@ -224,23 +207,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
                 ws["G22"].value = total_amt
             except Exception:
                 pass
-        try:
-            write_value_preserve_borders(ws, "G41", total_amt)
-        except Exception:
-            try:
-                ws["G41"].value = total_amt
-            except Exception:
-                pass
-
-        for row in ws.iter_rows(min_row=1, max_row=300):
-            for cell in row:
-                if cell.value and str(cell.value).strip().upper() == "TOTAL":
-                    target = f"G{cell.row}"
-                    try:
-                        write_value_preserve_borders(ws, target, total_amt)
-                    except Exception:
-                        ws[target].value = total_amt
-                    break
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -248,7 +214,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — MRI FF Fix")
+st.title("Medical Quotation Generator — Full Tariff Capture")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
@@ -264,7 +230,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []
+            st.session_state.selected_rows = []  # will fill all scans automatically
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
@@ -277,8 +243,8 @@ if "parsed_df" in st.session_state:
         st.write("Parsed DataFrame columns:", df.columns.tolist())
         st.dataframe(df.head(200))
 
+    # Select category/subcategory
     cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
-
     if not cats:
         st.warning("No categories found in the uploaded charge sheet.")
     else:
@@ -295,24 +261,15 @@ if "parsed_df" in st.session_state:
             if sub_sel == "-- all --":
                 scans_for_cat = df[df["CATEGORY"] == main_sel].reset_index(drop=True)
             else:
-                scans_for_cat = df[
-                    (df["CATEGORY"] == main_sel) &
-                    (df["SUBCATEGORY"] == sub_sel)
-                ].reset_index(drop=True)
+                scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
 
-            # Keep only real scans
-            scans_filtered = scans_for_cat[
-                (~scans_for_cat["SCAN"].isin(GARBAGE_KEYS)) &
-                (scans_for_cat["SCAN"].notna())
-            ]
-            st.session_state.selected_rows = scans_filtered.to_dict(orient="records")
+            st.session_state.selected_rows = scans_for_cat.to_dict(orient="records")
 
     st.markdown("---")
     st.subheader("Selected Scans")
     if "selected_rows" not in st.session_state or len(st.session_state.selected_rows) == 0:
-        st.info("No real scans available in this category/subcategory.")
-        selected_df = pd.DataFrame(columns=["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"])
-        st.dataframe(selected_df)
+        st.info("No scans found for this category/subcategory.")
+        st.dataframe(pd.DataFrame(columns=["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]))
     else:
         sel_df = pd.DataFrame(st.session_state.selected_rows)
         display_df = sel_df[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]]
