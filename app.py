@@ -109,7 +109,7 @@ def find_template_positions(ws):
         "MOD": ["MOD", "MODIFIER"],
         "QTY": ["QTY", "QUANTITY"],
         "FEES": ["FEES"],
-        "AMOUNT": ["AMOUNT", " AMOUNT", "TOTAL"]
+        "AMOUNT": ["AMOUNT", " AMOUNT", "TOTAL", "Line Total", "Amount"]
     }
 
     for row in ws.iter_rows(min_row=1, max_row=300):
@@ -202,9 +202,9 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
 
-        # Write total in AMOUNT (row 22)
+        # Force total to G22
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, cols.get("AMOUNT"), total_amt)                # Total in G22
+        write_safe(ws, 22, 7, total_amt)  # column 7 = G
 
     buf = io.BytesIO()
     wb.save(buf)
