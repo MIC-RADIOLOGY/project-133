@@ -199,12 +199,12 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
             write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
-            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))  # FEES = line amount
+            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
 
         # Write total in AMOUNT (row 22)
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, cols.get("AMOUNT"), total_amt)
+        write_safe(ws, 22, cols.get("AMOUNT"), total_amt)                # Total in G22
 
     buf = io.BytesIO()
     wb.save(buf)
