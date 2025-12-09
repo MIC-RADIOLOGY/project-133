@@ -21,14 +21,27 @@ quote_date = st.date_input("Quotation Date")
 
 st.write("Select items that will appear in the quotation:")
 
+# -------------------------------------------------------
+# Load charge sheet with correct column mapping
+# -------------------------------------------------------
 if uploaded_charge_sheet:
-    df = pd.read_excel(uploaded_charge_sheet)
+    df_raw = pd.read_excel(uploaded_charge_sheet)
 
-    # Ensure expected columns
-    expected_columns = {"Description", "Tariff", "Modifier", "Qty", "Fees"}
-    if not expected_columns.issubset(df.columns):
-        st.error("Charge sheet must contain: Description, Tariff, Modifier, Qty, Fees")
+    # REQUIRED columns based on your real file
+    required_cols = {"DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES"}
+
+    if not required_cols.issubset(df_raw.columns):
+        st.error("Your charge sheet is missing one of these required columns: DESCRIPTION, TARRIF, MOD, QTY, FEES")
         st.stop()
+
+    # Map your real columns to internal names
+    df = df_raw.rename(columns={
+        "DESCRIPTION": "Description",
+        "TARRIF": "Tariff",
+        "MOD": "Modifier",
+        "QTY": "Qty",
+        "FEES": "Fees"
+    })
 
     selected = st.multiselect(
         "Choose Procedures",
@@ -36,30 +49,25 @@ if uploaded_charge_sheet:
     )
 
     selected_rows = df[df["Description"].isin(selected)]
+
 else:
     selected_rows = pd.DataFrame()
 
 # -------------------------------------------------------
-# FUNCTION: Fill the Excel template
+# FUNCTION: Fill Excel template
 # -------------------------------------------------------
 def fill_excel_template(template_file, patient, member, provider, date, rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
 
-    # ----------------------------------------------
-    # Fill header fields (Top section)
-    # ----------------------------------------------
+    # Fill header fields
     ws["B4"] = patient
     ws["B5"] = member
     ws["B6"] = provider
     ws["B7"] = str(date)
 
-    # ----------------------------------------------
-    # BLUE LINE stays untouched (ROW 22)
-    # Data must start from ROW 23 downwards
-    # ----------------------------------------------
+    # Blue line row = 22, untouched
     START_ROW = 23
-
     current_row = START_ROW
 
     for _, r in rows.iterrows():
@@ -67,24 +75,16 @@ def fill_excel_template(template_file, patient, member, provider, date, rows):
         ws.cell(row=current_row, column=2, value=r["Tariff"])
         ws.cell(row=current_row, column=3, value=r["Modifier"] if not pd.isna(r["Modifier"]) else "")
         ws.cell(row=current_row, column=4, value=r["Qty"])
-        ws.cell(row=current_row, column=7, value=r["Fees"])  # FEES goes to column G
+        ws.cell(row=current_row, column=7, value=r["Fees"])  # Fees → Column G
 
-        # Format alignment
+        # Alignment
         for col in [1, 2, 3, 4, 7]:
             ws.cell(row=current_row, column=col).alignment = Alignment(horizontal="left")
 
         current_row += 1
 
-    # ----------------------------------------------
-    # TOTAL remains in G22 EXACTLY as your template
-    # Template must already contain formula:
-    # =SUM(G23:G200)
-    # ----------------------------------------------
+    # DO NOT touch G22 (total formula stays)
 
-    # DO NOT touch G22
-    # DO NOT write any totals here
-
-    # Save output to memory
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
