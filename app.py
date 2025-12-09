@@ -33,7 +33,7 @@ def safe_int(x, default=1):
 
 def safe_float(x, default=0.0):
     try:
-        x_str = str(x).replace(",", "").strip()
+        x_str = str(x).replace(",", "").replace("$", "").strip()
         return float(x_str)
     except Exception:
         return default
@@ -41,6 +41,7 @@ def safe_float(x, default=0.0):
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
+
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -56,20 +57,17 @@ def load_charge_sheet(file) -> pd.DataFrame:
             continue
         exam_u = exam.upper()
 
-        # Detect main category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
-        # Subcategory header (tariff & amount blank)
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
         amt_blank = pd.isna(r["E_AMOUNT"]) or str(r["E_AMOUNT"]).strip() in ["", "nan", "NaN", "None"]
         if tariff_blank and amt_blank:
             current_subcategory = exam
             continue
 
-        # Skip garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
@@ -77,7 +75,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
-            "TARIFF": safe_float(r["B_TARIFF"], 0.0),
+            "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
@@ -104,20 +102,20 @@ def write_safe(ws, r, c, value):
 
 def find_template_positions(ws):
     pos = {}
-
+    
     header_map = {
         "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
         "TARIFF": ["TARIFF", "TARRIF"],
         "MOD": ["MOD", "MODIFIER"],
         "QTY": ["QTY", "QUANTITY"],
-        "FEES": ["FEES", "AMOUNT", "PRICE"],
-        "AMOUNT": ["AMOUNT", " AMOUNT"]
+        "FEES": ["FEES"],
+        "AMOUNT": ["AMOUNT", " AMOUNT", "TOTAL"]
     }
 
     for row in ws.iter_rows(min_row=1, max_row=300):
         for cell in row:
             if cell.value:
-                t = u(str(cell.value)).strip()
+                t = u(cell.value).strip()
                 if "PATIENT" in t and "patient_cell" not in pos:
                     pos["patient_cell"] = (cell.row, cell.column)
                 if "MEMBER" in t and "member_cell" not in pos:
@@ -126,12 +124,10 @@ def find_template_positions(ws):
                     pos["provider_cell"] = (cell.row, cell.column)
                 if "DATE" in t and "date_cell" not in pos:
                     pos["date_cell"] = (cell.row, cell.column)
-
                 for key, variants in header_map.items():
                     if any(v in t for v in variants):
                         if "cols" not in pos:
                             pos["cols"] = {}
-                            pos["table_start_row"] = cell.row + 1
                         pos["cols"][key] = cell.column
     return pos
 
@@ -147,6 +143,30 @@ def replace_after_colon_in_same_cell(ws, row, col, new_value):
         cell.value = f"{left}: {new_value}"
     else:
         cell.value = new_value
+
+def write_value_preserve_borders(ws, cell_address, value):
+    cell = ws[cell_address]
+    merged_range = None
+    for mr in ws.merged_cells.ranges:
+        if cell.coordinate in mr:
+            merged_range = mr
+            cell = ws[mr.coord.split(":")[0]]
+            ws.unmerge_cells(str(mr))
+            break
+    border = copy(cell.border)
+    font = copy(cell.font)
+    fill = copy(cell.fill)
+    alignment = copy(cell.alignment)
+
+    cell.value = value
+
+    cell.border = border
+    cell.font = font
+    cell.fill = fill
+    cell.alignment = alignment
+
+    if merged_range:
+        ws.merge_cells(str(merged_range))
 
 # ---------- Fill Template ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -170,23 +190,21 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         ws.cell(row=r+1, column=c, value=today_str)
 
     if "cols" in pos:
-        start_row = 22  # always start at A22
+        start_row = 22  # always start DESCRIPTION at row 22
         cols = pos["cols"]
 
+        # Write each scan on a single row
         for idx, sr in enumerate(scan_rows):
             rowptr = start_row + idx
-
-            # Write all fields on the same row
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
             write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
             write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
-            write_safe(ws, rowptr, cols.get("AMOUNT"), sr.get("AMOUNT"))
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))  # FEES = line amount
 
-        # TOTAL always in G22
+        # Write total in AMOUNT (row 22)
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, 7, total_amt)  # column 7 = G
+        write_safe(ws, 22, cols.get("AMOUNT"), total_amt)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -210,7 +228,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # will fill scans automatically
+            st.session_state.selected_rows = []  # fill automatically
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
