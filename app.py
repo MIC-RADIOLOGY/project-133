@@ -103,32 +103,49 @@ def write_safe(ws, r, c, value):
 def find_template_positions(ws):
     pos = {}
     
+    # Map logical column names to possible variants
     header_map = {
-        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
-        "TARIFF": ["TARIFF", "TARRIF"],
+        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION", "TEST NAME"],
+        "TARIFF": ["TARIFF", "TARRIF", "RATE", "PRICE"],
         "MOD": ["MOD", "MODIFIER"],
-        "QTY": ["QTY", "QUANTITY"],
-        "FEES": ["FEES"],
-        "AMOUNT": ["AMOUNT", " AMOUNT", "TOTAL", "Line Total", "Amount"]
+        "QTY": ["QTY", "QUANTITY", "NO", "NUMBER"],
+        "FEES": ["FEES", "CHARGE", "AMOUNT PER ITEM"],
+        "AMOUNT": ["AMOUNT", "TOTAL", "LINE TOTAL", "TOTAL AMOUNT"]
     }
+
+    found_headers = {key: None for key in header_map}
 
     for row in ws.iter_rows(min_row=1, max_row=300):
         for cell in row:
-            if cell.value:
-                t = u(cell.value).strip()
-                if "PATIENT" in t and "patient_cell" not in pos:
-                    pos["patient_cell"] = (cell.row, cell.column)
-                if "MEMBER" in t and "member_cell" not in pos:
-                    pos["member_cell"] = (cell.row, cell.column)
-                if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
-                    pos["provider_cell"] = (cell.row, cell.column)
-                if "DATE" in t and "date_cell" not in pos:
-                    pos["date_cell"] = (cell.row, cell.column)
-                for key, variants in header_map.items():
-                    if any(v in t for v in variants):
-                        if "cols" not in pos:
-                            pos["cols"] = {}
-                        pos["cols"][key] = cell.column
+            if not cell.value:
+                continue
+            cell_text = str(cell.value).upper().strip()
+            
+            # Detect patient, member, provider, date cells
+            if "PATIENT" in cell_text and "patient_cell" not in pos:
+                pos["patient_cell"] = (cell.row, cell.column)
+            if "MEMBER" in cell_text and "member_cell" not in pos:
+                pos["member_cell"] = (cell.row, cell.column)
+            if ("PROVIDER" in cell_text or "EXAMINATION" in cell_text) and "provider_cell" not in pos:
+                pos["provider_cell"] = (cell.row, cell.column)
+            if "DATE" in cell_text and "date_cell" not in pos:
+                pos["date_cell"] = (cell.row, cell.column)
+            
+            # Detect headers
+            for key, variants in header_map.items():
+                for v in variants:
+                    if v.upper() in cell_text:
+                        found_headers[key] = cell.column
+
+    # Only keep found headers
+    pos["cols"] = {k: v for k, v in found_headers.items() if v is not None}
+
+    # Warn if any required column is missing
+    required = ["DESCRIPTION", "TARIFF", "MOD", "QTY", "FEES"]
+    missing = [col for col in required if col not in pos["cols"]]
+    if missing:
+        raise ValueError(f"Your charge sheet template is missing one of these required columns: {', '.join(missing)}")
+
     return pos
 
 def replace_after_colon_in_same_cell(ws, row, col, new_value):
@@ -198,7 +215,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             rowptr = start_row + idx
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
-            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
+            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER") or "")
             write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
             write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
 
