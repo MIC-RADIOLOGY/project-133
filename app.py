@@ -56,17 +56,20 @@ def load_charge_sheet(file) -> pd.DataFrame:
             continue
         exam_u = exam.upper()
 
+        # Detect main category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
+        # Subcategory header (tariff & amount blank)
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
         amt_blank = pd.isna(r["E_AMOUNT"]) or str(r["E_AMOUNT"]).strip() in ["", "nan", "NaN", "None"]
         if tariff_blank and amt_blank:
             current_subcategory = exam
             continue
 
+        # Skip garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
@@ -99,46 +102,9 @@ def write_safe(ws, r, c, value):
                 ws[topcell].value = value
                 return
 
-def replace_after_colon_in_same_cell(ws, row, col, new_value):
-    cell = ws.cell(row=row, column=col)
-    for mr in ws.merged_cells.ranges:
-        if cell.coordinate in mr:
-            cell = ws[mr.coord.split(":")[0]]
-            break
-    old = str(cell.value) if cell.value else ""
-    if ":" in old:
-        left = old.split(":", 1)[0]
-        cell.value = f"{left}: {new_value}"
-    else:
-        cell.value = new_value
-
-def write_value_preserve_borders(ws, cell_address, value):
-    cell = ws[cell_address]
-    merged_range = None
-    for mr in ws.merged_cells.ranges:
-        if cell.coordinate in mr:
-            merged_range = mr
-            cell = ws[mr.coord.split(":")[0]]
-            ws.unmerge_cells(str(mr))
-            break
-    border = copy(cell.border)
-    font = copy(cell.font)
-    fill = copy(cell.fill)
-    alignment = copy(cell.alignment)
-
-    cell.value = value
-
-    cell.border = border
-    cell.font = font
-    cell.fill = fill
-    cell.alignment = alignment
-
-    if merged_range:
-        ws.merge_cells(str(merged_range))
-
 def find_template_positions(ws):
     pos = {}
-    
+
     header_map = {
         "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
         "TARIFF": ["TARIFF", "TARRIF"],
@@ -151,8 +117,7 @@ def find_template_positions(ws):
     for row in ws.iter_rows(min_row=1, max_row=300):
         for cell in row:
             if cell.value:
-                t = u(cell.value).strip()
-
+                t = u(str(cell.value)).strip()
                 if "PATIENT" in t and "patient_cell" not in pos:
                     pos["patient_cell"] = (cell.row, cell.column)
                 if "MEMBER" in t and "member_cell" not in pos:
@@ -168,8 +133,20 @@ def find_template_positions(ws):
                             pos["cols"] = {}
                             pos["table_start_row"] = cell.row + 1
                         pos["cols"][key] = cell.column
-
     return pos
+
+def replace_after_colon_in_same_cell(ws, row, col, new_value):
+    cell = ws.cell(row=row, column=col)
+    for mr in ws.merged_cells.ranges:
+        if cell.coordinate in mr:
+            cell = ws[mr.coord.split(":")[0]]
+            break
+    old = str(cell.value) if cell.value else ""
+    if ":" in old:
+        left = old.split(":", 1)[0]
+        cell.value = f"{left}: {new_value}"
+    else:
+        cell.value = new_value
 
 # ---------- Fill Template ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -177,6 +154,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
+    # Fill patient info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
@@ -191,35 +169,24 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         today_str = datetime.now().strftime("%d/%m/%Y")
         ws.cell(row=r+1, column=c, value=today_str)
 
-    # Hard-coded export start
-    rowptr = 22
-    start_col = 2  # Column B for TARRIF
-    col_map = {
-        "DESCRIPTION": 1,  # Column A
-        "TARIFF": start_col,
-        "MOD": start_col + 1,
-        "QTY": start_col + 2,
-        "FEES": start_col + 3,
-        "AMOUNT": start_col + 4
-    }
+    if "cols" in pos:
+        start_row = 22  # always start at A22
+        cols = pos["cols"]
 
-    for sr in scan_rows:
-        # Row 1: DESCRIPTION only
-        write_safe(ws, rowptr, col_map["DESCRIPTION"], sr.get("SCAN"))
+        for idx, sr in enumerate(scan_rows):
+            rowptr = start_row + idx
 
-        # Row 2: Details
-        detail_row = rowptr + 1
-        write_safe(ws, detail_row, col_map["TARIFF"], sr.get("TARIFF"))
-        write_safe(ws, detail_row, col_map["MOD"], sr.get("MODIFIER"))
-        write_safe(ws, detail_row, col_map["QTY"], sr.get("QTY"))
-        write_safe(ws, detail_row, col_map["FEES"], sr.get("AMOUNT"))
-        write_safe(ws, detail_row, col_map["AMOUNT"], sr.get("AMOUNT"))
+            # Write all fields on the same row
+            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
+            write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
+            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
+            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
+            write_safe(ws, rowptr, cols.get("AMOUNT"), sr.get("AMOUNT"))
 
-        rowptr += 2
-
-    # TOTAL in G22
-    total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-    write_value_preserve_borders(ws, "G22", total_amt)
+        # TOTAL always in G22
+        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
+        write_safe(ws, 22, 7, total_amt)  # column 7 = G
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -243,7 +210,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # fill automatically
+            st.session_state.selected_rows = []  # will fill scans automatically
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
