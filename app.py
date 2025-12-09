@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
-import openpyxl
 import io
-from copy import copy
 from datetime import datetime
+import xlsxwriter
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -83,141 +82,58 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
-# ---------- Excel Template Helpers ----------
-def write_safe(ws, r, c, value):
-    if c is None:
-        return
-    try:
-        cell = ws.cell(row=r, column=c)
-    except Exception:
-        return
-    try:
-        cell.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                topcell = mr.coord.split(":")[0]
-                ws[topcell].value = value
-                return
+# ---------- XLSXWriter Quotation ----------
+def generate_quotation_xlsx(patient, member, provider, scan_rows):
+    output = io.BytesIO()
+    wb = xlsxwriter.Workbook(output, {'in_memory': True})
+    ws = wb.add_worksheet("Quotation")
 
-def find_template_positions(ws):
-    pos = {}
-    
-    header_map = {
-        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
-        "TARIFF": ["TARIFF", "TARRIF"],
-        "MOD": ["MOD", "MODIFIER"],
-        "QTY": ["QTY", "QUANTITY"],
-        "FEES": ["FEES"],
-        "AMOUNT": ["AMOUNT", " AMOUNT", "TOTAL", "Line Total", "Amount"]
-    }
+    # Formats
+    bold = wb.add_format({'bold': True})
+    money = wb.add_format({'num_format': '$#,##0.00'})
+    header_fmt = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border':1})
+    blue_line_fmt = wb.add_format({'bg_color': '#00B0F0', 'bold': True, 'border':1, 'align':'center'})
 
-    for row in ws.iter_rows(min_row=1, max_row=300):
-        for cell in row:
-            if cell.value:
-                t = u(cell.value).strip()
-                if "PATIENT" in t and "patient_cell" not in pos:
-                    pos["patient_cell"] = (cell.row, cell.column)
-                if "MEMBER" in t and "member_cell" not in pos:
-                    pos["member_cell"] = (cell.row, cell.column)
-                if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
-                    pos["provider_cell"] = (cell.row, cell.column)
-                if "DATE" in t and "date_cell" not in pos:
-                    pos["date_cell"] = (cell.row, cell.column)
-                for key, variants in header_map.items():
-                    if any(v in t for v in variants):
-                        if "cols" not in pos:
-                            pos["cols"] = {}
-                        pos["cols"][key] = cell.column
-    return pos
+    # Write patient info
+    ws.write('A1', 'Patient:')
+    ws.write('B1', patient)
+    ws.write('A2', 'Member:')
+    ws.write('B2', member)
+    ws.write('A3', 'Provider:')
+    ws.write('B3', provider)
+    ws.write('A4', 'Date:')
+    ws.write('B4', datetime.now().strftime("%d/%m/%Y"))
 
-def replace_after_colon_in_same_cell(ws, row, col, new_value):
-    cell = ws.cell(row=row, column=col)
-    for mr in ws.merged_cells.ranges:
-        if cell.coordinate in mr:
-            cell = ws[mr.coord.split(":")[0]]
-            break
-    old = str(cell.value) if cell.value else ""
-    if ":" in old:
-        left = old.split(":", 1)[0]
-        cell.value = f"{left}: {new_value}"
-    else:
-        cell.value = new_value
+    # Write headers
+    headers = ["Description", "Tariff", "Modifier", "Qty", "Fees"]
+    for col, h in enumerate(headers):
+        ws.write(6, col, h, header_fmt)
 
-def write_value_preserve_borders(ws, cell_address, value):
-    cell = ws[cell_address]
-    merged_range = None
-    for mr in ws.merged_cells.ranges:
-        if cell.coordinate in mr:
-            merged_range = mr
-            cell = ws[mr.coord.split(":")[0]]
-            ws.unmerge_cells(str(mr))
-            break
-    border = copy(cell.border)
-    font = copy(cell.font)
-    fill = copy(cell.fill)
-    alignment = copy(cell.alignment)
+    # Write scan rows
+    start_row = 7
+    for i, sr in enumerate(scan_rows):
+        r = start_row + i
+        ws.write(r, 0, sr['SCAN'])
+        ws.write(r, 1, sr['TARIFF'], money)
+        ws.write(r, 2, sr['MODIFIER'])
+        ws.write(r, 3, sr['QTY'])
+        ws.write(r, 4, sr['AMOUNT'], money)
 
-    cell.value = value
+    # Blue line total row
+    total_row = start_row + len(scan_rows)
+    ws.merge_range(total_row, 0, total_row, 3, "Total", blue_line_fmt)
+    ws.write_formula(total_row, 4, f"=SUM(E{start_row+1}:E{total_row})", blue_line_fmt)
 
-    cell.border = border
-    cell.font = font
-    cell.fill = fill
-    cell.alignment = alignment
-
-    if merged_range:
-        ws.merge_cells(str(merged_range))
-
-# ---------- Fill Template ----------
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
-    wb = openpyxl.load_workbook(template_file)
-    ws = wb.active
-    pos = find_template_positions(ws)
-
-    # Fill patient info
-    if "patient_cell" in pos:
-        r, c = pos["patient_cell"]
-        replace_after_colon_in_same_cell(ws, r, c, patient)
-    if "member_cell" in pos:
-        r, c = pos["member_cell"]
-        replace_after_colon_in_same_cell(ws, r, c, member)
-    if "provider_cell" in pos:
-        r, c = pos["provider_cell"]
-        replace_after_colon_in_same_cell(ws, r, c, provider)
-    if "date_cell" in pos:
-        r, c = pos["date_cell"]
-        today_str = datetime.now().strftime("%d/%m/%Y")
-        ws.cell(row=r+1, column=c, value=today_str)
-
-    if "cols" in pos:
-        start_row = 22  # always start DESCRIPTION at row 22
-        cols = pos["cols"]
-
-        # Write each scan on a single row
-        for idx, sr in enumerate(scan_rows):
-            rowptr = start_row + idx
-            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
-            write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
-            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER"))
-            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
-
-        # Force total to G22
-        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, 7, total_amt)  # column 7 = G
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
+    wb.close()
+    output.seek(0)
+    return output
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — Full Tariff Capture")
+st.title("Medical Quotation Generator — XLSXWriter Version")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
@@ -273,11 +189,11 @@ if "parsed_df" in st.session_state:
         st.dataframe(display_df.reset_index(drop=True))
 
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
-        st.markdown(f"**Total Amount:** {total_amt:.2f}")
+        st.markdown(f"**Total Amount (Preview):** {total_amt:.2f}")
 
-        if uploaded_template and st.button("Generate Quotation and Download Excel"):
+        if st.button("Generate Quotation and Download Excel"):
             try:
-                out = fill_excel_template(uploaded_template, patient, member, provider, st.session_state.selected_rows)
+                out = generate_quotation_xlsx(patient, member, provider, st.session_state.selected_rows)
                 st.download_button(
                     "Download Quotation",
                     data=out,
