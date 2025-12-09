@@ -6,7 +6,7 @@ import xlsxwriter
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# ---------- Config / heuristics ----------
+# ---------- Config ----------
 MAIN_CATEGORIES = {
     "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN",
     "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND",
@@ -40,7 +40,6 @@ def safe_float(x, default=0.0):
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
-
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -88,13 +87,19 @@ def generate_quotation_xlsx(patient, member, provider, scan_rows):
     wb = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = wb.add_worksheet("Quotation")
 
-    # Formats
+    # ---------- Formats ----------
     bold = wb.add_format({'bold': True})
-    money = wb.add_format({'num_format': '$#,##0.00'})
-    header_fmt = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border':1})
+    header_fmt = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border':1, 'align':'center'})
+    money = wb.add_format({'num_format': '$#,##0.00', 'border':1})
+    border_fmt = wb.add_format({'border':1})
     blue_line_fmt = wb.add_format({'bg_color': '#00B0F0', 'bold': True, 'border':1, 'align':'center'})
 
-    # Write patient info
+    # ---------- Row heights ----------
+    ws.set_row(6, 20)  # header row
+    for r in range(7, 7 + len(scan_rows) + 2):
+        ws.set_row(r, 18)
+
+    # ---------- Patient info ----------
     ws.write('A1', 'Patient:')
     ws.write('B1', patient)
     ws.write('A2', 'Member:')
@@ -104,22 +109,24 @@ def generate_quotation_xlsx(patient, member, provider, scan_rows):
     ws.write('A4', 'Date:')
     ws.write('B4', datetime.now().strftime("%d/%m/%Y"))
 
-    # Write headers
+    # ---------- Headers ----------
     headers = ["Description", "Tariff", "Modifier", "Qty", "Fees"]
-    for col, h in enumerate(headers):
+    col_widths = [30, 15, 15, 10, 15]
+    for col, (h, w) in enumerate(zip(headers, col_widths)):
+        ws.set_column(col, col, w)
         ws.write(6, col, h, header_fmt)
 
-    # Write scan rows
+    # ---------- Scan rows ----------
     start_row = 7
     for i, sr in enumerate(scan_rows):
         r = start_row + i
-        ws.write(r, 0, sr['SCAN'])
+        ws.write(r, 0, sr['SCAN'], border_fmt)
         ws.write(r, 1, sr['TARIFF'], money)
-        ws.write(r, 2, sr['MODIFIER'])
-        ws.write(r, 3, sr['QTY'])
+        ws.write(r, 2, sr['MODIFIER'], border_fmt)
+        ws.write(r, 3, sr['QTY'], border_fmt)
         ws.write(r, 4, sr['AMOUNT'], money)
 
-    # Blue line total row
+    # ---------- Blue total line ----------
     total_row = start_row + len(scan_rows)
     ws.merge_range(total_row, 0, total_row, 3, "Total", blue_line_fmt)
     ws.write_formula(total_row, 4, f"=SUM(E{start_row+1}:E{total_row})", blue_line_fmt)
@@ -129,7 +136,7 @@ def generate_quotation_xlsx(patient, member, provider, scan_rows):
     return output
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — XLSXWriter Version")
+st.title("Medical Quotation Generator — Styled XLSXWriter")
 
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
