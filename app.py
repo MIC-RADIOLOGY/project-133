@@ -41,7 +41,6 @@ def safe_float(x, default=0.0):
 # ---------- Parser ----------
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
-
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -70,11 +69,10 @@ def load_charge_sheet(file) -> pd.DataFrame:
             current_subcategory = exam
             continue
 
-        # Skip completely empty or garbage rows
+        # Skip garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Include all lines: scans, FF, consumables
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -104,6 +102,59 @@ def write_safe(ws, r, c, value):
                 ws[topcell].value = value
                 return
 
+def find_template_positions(ws):
+    pos = {}
+
+    header_map = {
+        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
+        "TARIFF": ["TARRIF", "TARIFF"],
+        "MOD": ["MOD", "MODIFIER"],
+        "QTY": ["QTY", "QUANTITY"],
+        "FEES": ["FEES"],
+        "AMOUNT": ["AMOUNT", " AMOUNT"]
+    }
+
+    for row in ws.iter_rows(min_row=1, max_row=300):
+        for cell in row:
+            if cell.value:
+                t = u(cell.value).strip()
+                t_clean = t.replace(" ", "")
+
+                # Detect patient/member/provider/date
+                if "PATIENT" in t and "patient_cell" not in pos:
+                    pos["patient_cell"] = (cell.row, cell.column)
+                if "MEMBER" in t and "member_cell" not in pos:
+                    pos["member_cell"] = (cell.row, cell.column)
+                if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
+                    pos["provider_cell"] = (cell.row, cell.column)
+                if "DATE" in t and "date_cell" not in pos:
+                    pos["date_cell"] = (cell.row, cell.column)
+
+                # Detect table headers
+                for key, variants in header_map.items():
+                    for v in variants:
+                        v_clean = v.replace(" ", "")
+                        if v_clean == t_clean:
+                            if "cols" not in pos:
+                                pos["cols"] = {}
+                                pos["table_start_row"] = cell.row + 1
+                            pos["cols"][key] = cell.column
+                            break
+    return pos
+
+def replace_after_colon_in_same_cell(ws, row, col, new_value):
+    cell = ws.cell(row=row, column=col)
+    for mr in ws.merged_cells.ranges:
+        if cell.coordinate in mr:
+            cell = ws[mr.coord.split(":")[0]]
+            break
+    old = str(cell.value) if cell.value else ""
+    if ":" in old:
+        left = old.split(":", 1)[0]
+        cell.value = f"{left}: {new_value}"
+    else:
+        cell.value = new_value
+
 def write_value_preserve_borders(ws, cell_address, value):
     cell = ws[cell_address]
     merged_range = None
@@ -128,56 +179,6 @@ def write_value_preserve_borders(ws, cell_address, value):
     if merged_range:
         ws.merge_cells(str(merged_range))
 
-def replace_after_colon_in_same_cell(ws, row, col, new_value):
-    cell = ws.cell(row=row, column=col)
-    for mr in ws.merged_cells.ranges:
-        if cell.coordinate in mr:
-            cell = ws[mr.coord.split(":")[0]]
-            break
-    old = str(cell.value) if cell.value else ""
-    if ":" in old:
-        left = old.split(":", 1)[0]
-        cell.value = f"{left}: {new_value}"
-    else:
-        cell.value = new_value
-
-def find_template_positions(ws):
-    pos = {}
-    
-    header_map = {
-        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION"],
-        "TARIFF": ["TARIFF", "TARRIF"],
-        "MOD": ["MOD", "MODIFIER"],
-        "QTY": ["QTY", "QUANTITY"],
-        "FEES": ["FEES"],
-        "AMOUNT": ["AMOUNT", " AMOUNT"]
-    }
-
-    for row in ws.iter_rows(min_row=1, max_row=300):
-        for cell in row:
-            if cell.value:
-                t = u(cell.value).strip()
-
-                # detect patient/member/provider/date
-                if "PATIENT" in t and "patient_cell" not in pos:
-                    pos["patient_cell"] = (cell.row, cell.column)
-                if "MEMBER" in t and "member_cell" not in pos:
-                    pos["member_cell"] = (cell.row, cell.column)
-                if ("PROVIDER" in t or "EXAMINATION" in t) and "provider_cell" not in pos:
-                    pos["provider_cell"] = (cell.row, cell.column)
-                if "DATE" in t and "date_cell" not in pos:
-                    pos["date_cell"] = (cell.row, cell.column)
-
-                # detect table headers
-                for key, variants in header_map.items():
-                    if any(v in t for v in variants):
-                        if "cols" not in pos:
-                            pos["cols"] = {}
-                            pos["table_start_row"] = cell.row + 1
-                        pos["cols"][key] = cell.column
-
-    return pos
-
 # ---------- Fill Template ----------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
@@ -200,14 +201,13 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
     if "cols" in pos:
         cols = pos["cols"]
+        rowptr = 22  # HARD-CODED DESCRIPTION start
 
-        # Hard-coded first description row = 22
-        rowptr = 22
         for sr in scan_rows:
-            # ROW 1: DESCRIPTION ONLY
+            # Row 1: DESCRIPTION
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
 
-            # ROW 2: DETAILS
+            # Row 2: details
             detail_row = rowptr + 1
             write_safe(ws, detail_row, cols.get("TARIFF"), sr.get("TARIFF"))
             mod_value = sr.get("MODIFIER")
@@ -216,10 +216,9 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             write_safe(ws, detail_row, cols.get("QTY"), sr.get("QTY"))
             write_safe(ws, detail_row, cols.get("FEES"), sr.get("AMOUNT"))
 
-            # next scan uses 2 rows
             rowptr += 2
 
-        # Write TOTAL in G22
+        # TOTAL always in G22
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
         try:
             write_value_preserve_borders(ws, "G22", total_amt)
@@ -251,7 +250,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # will fill all scans automatically
+            st.session_state.selected_rows = []
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
