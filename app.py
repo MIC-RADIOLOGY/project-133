@@ -20,9 +20,6 @@ def clean_text(x) -> str:
         return ""
     return str(x).replace("\xa0", " ").strip()
 
-def u(x) -> str:
-    return clean_text(x).upper()
-
 def safe_int(x, default=1):
     try:
         x_str = str(x).replace(",", "").strip()
@@ -81,20 +78,28 @@ def load_charge_sheet(file) -> pd.DataFrame:
 
     return pd.DataFrame(structured)
 
-# ---------- XLSXWriter Quotation ----------
+# ---------- Generate Excel ----------
 def generate_quotation_xlsx(patient, member, provider, scan_rows):
     output = io.BytesIO()
     wb = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = wb.add_worksheet("Quotation")
 
     # ---------- Formats ----------
-    bold = wb.add_format({'bold': True})
     header_fmt = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border':1, 'align':'center'})
-    money = wb.add_format({'num_format': '$#,##0.00', 'border':1})
-    border_fmt = wb.add_format({'border':1})
-    blue_line_fmt = wb.add_format({'bg_color': '#00B0F0', 'bold': True, 'border':1, 'align':'center'})
+    money_fmt = wb.add_format({'num_format': '$#,##0.00', 'border':1})
+    text_fmt = wb.add_format({'border':1})
+    blue_total_fmt = wb.add_format({'bg_color': '#00B0F0', 'bold': True, 'border':1, 'align':'center'})
+
+    # ---------- Column widths ----------
+    col_widths = [30, 15, 12, 8, 15]
+    for col, width in enumerate(col_widths):
+        ws.set_column(col, col, width)
 
     # ---------- Row heights ----------
+    ws.set_row(0, 18)
+    ws.set_row(1, 18)
+    ws.set_row(2, 18)
+    ws.set_row(3, 18)
     ws.set_row(6, 20)  # header row
     for r in range(7, 7 + len(scan_rows) + 2):
         ws.set_row(r, 18)
@@ -109,36 +114,32 @@ def generate_quotation_xlsx(patient, member, provider, scan_rows):
     ws.write('A4', 'Date:')
     ws.write('B4', datetime.now().strftime("%d/%m/%Y"))
 
-    # ---------- Headers ----------
+    # ---------- Header ----------
     headers = ["Description", "Tariff", "Modifier", "Qty", "Fees"]
-    col_widths = [30, 15, 15, 10, 15]
-    for col, (h, w) in enumerate(zip(headers, col_widths)):
-        ws.set_column(col, col, w)
+    for col, h in enumerate(headers):
         ws.write(6, col, h, header_fmt)
 
     # ---------- Scan rows ----------
     start_row = 7
     for i, sr in enumerate(scan_rows):
         r = start_row + i
-        ws.write(r, 0, sr['SCAN'], border_fmt)
-        ws.write(r, 1, sr['TARIFF'], money)
-        ws.write(r, 2, sr['MODIFIER'], border_fmt)
-        ws.write(r, 3, sr['QTY'], border_fmt)
-        ws.write(r, 4, sr['AMOUNT'], money)
+        ws.write(r, 0, sr['SCAN'], text_fmt)
+        ws.write(r, 1, sr['TARIFF'], money_fmt)
+        ws.write(r, 2, sr['MODIFIER'], text_fmt)
+        ws.write(r, 3, sr['QTY'], text_fmt)
+        ws.write(r, 4, sr['AMOUNT'], money_fmt)
 
     # ---------- Blue total line ----------
     total_row = start_row + len(scan_rows)
-    ws.merge_range(total_row, 0, total_row, 3, "Total", blue_line_fmt)
-    ws.write_formula(total_row, 4, f"=SUM(E{start_row+1}:E{total_row})", blue_line_fmt)
+    ws.merge_range(total_row, 0, total_row, 3, "Total", blue_total_fmt)
+    ws.write_formula(total_row, 4, f"=SUM(E{start_row+1}:E{total_row})", blue_total_fmt)
 
     wb.close()
     output.seek(0)
     return output
 
 # ---------- Streamlit UI ----------
-st.title("Medical Quotation Generator — Styled XLSXWriter")
-
-debug_mode = st.checkbox("Show parsing debug output", value=False)
+st.title("Medical Quotation Generator — Sample Layout")
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
 
@@ -151,7 +152,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # fill automatically
+            st.session_state.selected_rows = parsed.to_dict(orient="records")
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
@@ -159,55 +160,19 @@ if uploaded_charge:
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
-
-    if debug_mode:
-        st.write("Parsed DataFrame columns:", df.columns.tolist())
-        st.dataframe(df.head(200))
-
-    cats = [c for c in sorted(df["CATEGORY"].dropna().unique())] if "CATEGORY" in df.columns else []
-    if not cats:
-        st.warning("No categories found in the uploaded charge sheet.")
-    else:
-        col1, col2 = st.columns([3, 4])
-        with col1:
-            main_sel = st.selectbox("Select Main Category", ["-- choose --"] + cats)
-        if main_sel != "-- choose --":
-            subs = [s for s in sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())]
-            if subs:
-                sub_sel = st.selectbox("Select Subcategory", ["-- all --"] + subs)
-            else:
-                sub_sel = "-- all --"
-
-            if sub_sel == "-- all --":
-                scans_for_cat = df[df["CATEGORY"] == main_sel].reset_index(drop=True)
-            else:
-                scans_for_cat = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True)
-
-            st.session_state.selected_rows = scans_for_cat.to_dict(orient="records")
-
-    st.markdown("---")
     st.subheader("Selected Scans")
-    if "selected_rows" not in st.session_state or len(st.session_state.selected_rows) == 0:
-        st.info("No scans found for this category/subcategory.")
-        st.dataframe(pd.DataFrame(columns=["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]))
-    else:
-        sel_df = pd.DataFrame(st.session_state.selected_rows)
-        display_df = sel_df[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]]
-        st.dataframe(display_df.reset_index(drop=True))
+    st.dataframe(df[["SCAN","TARIFF","MODIFIER","QTY","AMOUNT"]].reset_index(drop=True))
 
-        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
-        st.markdown(f"**Total Amount (Preview):** {total_amt:.2f}")
+    total_amt = sum([safe_float(r.get("AMOUNT", 0.0)) for r in st.session_state.selected_rows])
+    st.markdown(f"**Total Amount (Preview):** {total_amt:.2f}")
 
-        if st.button("Generate Quotation and Download Excel"):
-            try:
-                out = generate_quotation_xlsx(patient, member, provider, st.session_state.selected_rows)
-                st.download_button(
-                    "Download Quotation",
-                    data=out,
-                    file_name=f"quotation_{(patient or 'patient').replace(' ', '_')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            except Exception as e:
-                st.error(f"Failed to generate quotation: {e}")
+    if st.button("Generate Quotation and Download Excel"):
+        out = generate_quotation_xlsx(patient, member, provider, st.session_state.selected_rows)
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name=f"quotation_{(patient or 'patient').replace(' ','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 else:
     st.info("Upload a charge sheet to begin.")
