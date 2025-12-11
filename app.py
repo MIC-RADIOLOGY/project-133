@@ -12,7 +12,6 @@ def normalize_header(h):
     if not isinstance(h, str):
         return h
     h = h.strip().upper()
-
     replacements = {
         "TARRIF": "TARIFF",
         "MOD": "MODIFIER",
@@ -31,41 +30,48 @@ def write_force(ws, row, col, value):
     if col is None:
         return
     cell = ws.cell(row, col)
-
-    # If cell is inside merged region, write to top-left instead
     for mr in ws.merged_cells.ranges:
         if cell.coordinate in mr:
             tl = mr.coord.split(":")[0]
             cell = ws[tl]
             break
-
     cell.value = value
 
 
 # ------------------------------------------------------------
-# PARSE CHARGE SHEET
+# PARSE CHARGE SHEET (AUTO DETECT HEADER ROW)
 # ------------------------------------------------------------
 def parse_charge_sheet(uploaded_file):
-    df = pd.read_excel(uploaded_file, dtype=str)
-    df.columns = [normalize_header(c) for c in df.columns]
+    df_raw = pd.read_excel(uploaded_file, header=None, dtype=str)
 
-    required = {"DESCRIPTION", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"}
-    missing = required - set(df.columns)
+    # Find header row automatically
+    header_row = None
+    expected = ["DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
+    for i in range(len(df_raw)):
+        row_values = [str(x).strip().upper() for x in df_raw.iloc[i].tolist()]
+        if all(exp in row_values for exp in expected):
+            header_row = i
+            break
+
+    if header_row is None:
+        raise ValueError("Could not locate header row with DESCRIPTION / TARRIF / MOD / QTY / FEES / AMOUNT")
+
+    # Reload using correct header row
+    df = pd.read_excel(uploaded_file, header=header_row, dtype=str)
+    df.columns = [c.strip().upper() for c in df.columns]
+
+    # Normalize TARRIF → TARIFF
+    df.rename(columns={"TARRIF": "TARIFF", "MOD": "MODIFIER"}, inplace=True)
+
+    required = ["DESCRIPTION", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]
+    missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    # Convert quantities
-    df["QTY"] = df["QTY"].apply(lambda x: int(x) if str(x).isdigit() else 1)
-
-    # FEES used for print
-    df["FEES"] = df["FEES"].apply(
-        lambda x: float(str(x).replace("$", "").replace(",", "")) if pd.notna(x) else 0.0
-    )
-
-    # AMOUNT used for total
-    df["AMOUNT"] = df["AMOUNT"].apply(
-        lambda x: float(str(x).replace("$", "").replace(",", "")) if pd.notna(x) else 0.0
-    )
+    # Clean and convert values
+    df["QTY"] = df["QTY"].apply(lambda x: int(str(x)) if str(x).isdigit() else 1)
+    df["FEES"] = df["FEES"].apply(lambda x: float(str(x).replace(",", "").replace("$", "")) if pd.notna(x) else 0.0)
+    df["AMOUNT"] = df["AMOUNT"].apply(lambda x: float(str(x).replace(",", "").replace("$", "")) if pd.notna(x) else 0.0)
 
     rows = []
     for _, r in df.iterrows():
@@ -87,7 +93,7 @@ def fill_excel_template(template_file, patient, member, provider, rows):
     workbook = openpyxl.load_workbook(template_file)
     ws = workbook.active
 
-    # Column mapping (your FINAL mapping)
+    # Column mapping
     cols = {
         "DESCRIPTION": 1,  # A
         "TARIFF": 2,       # B
@@ -97,12 +103,12 @@ def fill_excel_template(template_file, patient, member, provider, rows):
         "AMOUNT": 7        # G
     }
 
-    # Header information in template
+    # Header info
     write_force(ws, 13, 2, f"FOR PATIENT: {patient}")
     write_force(ws, 14, 2, f"MEMBER NUMBER: {member}")
     write_force(ws, 12, 5, provider)
 
-    # Write items starting at row 20
+    # Start writing items at row 20
     start_row = 20
     rowptr = start_row
 
@@ -114,7 +120,7 @@ def fill_excel_template(template_file, patient, member, provider, rows):
         write_force(ws, rowptr, cols["FEES"], item["FEES"])
         rowptr += 1
 
-    # Total in G22 using AMOUNT
+    # Total in G22 (column 7) using AMOUNT
     total_amount = sum([r["AMOUNT"] for r in rows])
     write_force(ws, 22, 7, total_amount)
 
