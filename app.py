@@ -103,7 +103,6 @@ def write_safe(ws, r, c, value):
 def find_template_positions(ws):
     pos = {}
     
-    # Map logical column names to possible variants
     header_map = {
         "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION", "TEST NAME"],
         "TARIFF": ["TARIFF", "TARRIF", "RATE", "PRICE"],
@@ -121,7 +120,6 @@ def find_template_positions(ws):
                 continue
             cell_text = str(cell.value).upper().strip()
             
-            # Detect patient, member, provider, date cells
             if "PATIENT" in cell_text and "patient_cell" not in pos:
                 pos["patient_cell"] = (cell.row, cell.column)
             if "MEMBER" in cell_text and "member_cell" not in pos:
@@ -131,16 +129,13 @@ def find_template_positions(ws):
             if "DATE" in cell_text and "date_cell" not in pos:
                 pos["date_cell"] = (cell.row, cell.column)
             
-            # Detect headers
             for key, variants in header_map.items():
                 for v in variants:
                     if v.upper() in cell_text:
                         found_headers[key] = cell.column
 
-    # Only keep found headers
     pos["cols"] = {k: v for k, v in found_headers.items() if v is not None}
 
-    # Warn if any required column is missing
     required = ["DESCRIPTION", "TARIFF", "MOD", "QTY", "FEES"]
     missing = [col for col in required if col not in pos["cols"]]
     if missing:
@@ -191,7 +186,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill patient info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
@@ -207,21 +201,19 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         ws.cell(row=r+1, column=c, value=today_str)
 
     if "cols" in pos:
-        start_row = 22  # always start DESCRIPTION at row 22
+        start_row = 22
         cols = pos["cols"]
 
-        # Write each scan on a single row
         for idx, sr in enumerate(scan_rows):
             rowptr = start_row + idx
             write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
             write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
             write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER") or "")
-            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
+            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))
+            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))
 
-        # Force total to G22
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, 7, total_amt)  # column 7 = G
+        write_safe(ws, 22, 7, total_amt)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -245,7 +237,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # fill automatically
+            st.session_state.selected_rows = []
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
@@ -290,7 +282,7 @@ if "parsed_df" in st.session_state:
         st.dataframe(display_df.reset_index(drop=True))
 
         total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in st.session_state.selected_rows])
-        st.markdown(f"**Total Amount:** {total_amt:.2f}")
+        st.markdown(f"Total Amount: {total_amt:.2f}")
 
         if uploaded_template and st.button("Generate Quotation and Download Excel"):
             try:
