@@ -100,54 +100,6 @@ def write_safe(ws, r, c, value):
                 ws[topcell].value = value
                 return
 
-def find_template_positions(ws):
-    pos = {}
-    
-    # Map logical column names to possible variants
-    header_map = {
-        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION", "TEST NAME"],
-        "TARIFF": ["TARIFF", "TARRIF", "RATE", "PRICE"],
-        "MOD": ["MOD", "MODIFIER"],
-        "QTY": ["QTY", "QUANTITY", "NO", "NUMBER"],
-        "FEES": ["FEES", "CHARGE", "AMOUNT PER ITEM"],
-        "AMOUNT": ["AMOUNT", "TOTAL", "LINE TOTAL", "TOTAL AMOUNT"]
-    }
-
-    found_headers = {key: None for key in header_map}
-
-    for row in ws.iter_rows(min_row=1, max_row=300):
-        for cell in row:
-            if not cell.value:
-                continue
-            cell_text = str(cell.value).upper().strip()
-            
-            # Detect patient, member, provider, date cells
-            if "PATIENT" in cell_text and "patient_cell" not in pos:
-                pos["patient_cell"] = (cell.row, cell.column)
-            if "MEMBER" in cell_text and "member_cell" not in pos:
-                pos["member_cell"] = (cell.row, cell.column)
-            if ("PROVIDER" in cell_text or "EXAMINATION" in cell_text) and "provider_cell" not in pos:
-                pos["provider_cell"] = (cell.row, cell.column)
-            if "DATE" in cell_text and "date_cell" not in pos:
-                pos["date_cell"] = (cell.row, cell.column)
-            
-            # Detect headers
-            for key, variants in header_map.items():
-                for v in variants:
-                    if v.upper() in cell_text:
-                        found_headers[key] = cell.column
-
-    # Only keep found headers
-    pos["cols"] = {k: v for k, v in found_headers.items() if v is not None}
-
-    # Warn if any required column is missing
-    required = ["DESCRIPTION", "TARIFF", "MOD", "QTY", "FEES"]
-    missing = [col for col in required if col not in pos["cols"]]
-    if missing:
-        raise ValueError(f"Your charge sheet template is missing one of these required columns: {', '.join(missing)}")
-
-    return pos
-
 def replace_after_colon_in_same_cell(ws, row, col, new_value):
     cell = ws.cell(row=row, column=col)
     for mr in ws.merged_cells.ranges:
@@ -185,13 +137,69 @@ def write_value_preserve_borders(ws, cell_address, value):
     if merged_range:
         ws.merge_cells(str(merged_range))
 
-# ---------- Fill Template ----------
+# Robust header detection
+def find_template_positions(ws):
+    pos = {}
+    header_map = {
+        "DESCRIPTION": ["DESCRIPTION", "PROCEDURE", "EXAMINATION", "TEST NAME"],
+        "TARIFF": ["TARIFF", "TARRIF", "RATE", "PRICE"],
+        "MOD": ["MOD", "MODIFIER"],
+        "QTY": ["QTY", "QUANTITY", "NO", "NUMBER"],
+        "FEES": ["FEES", "CHARGE", "AMOUNT PER ITEM"],
+        "AMOUNT": ["AMOUNT", "TOTAL", "LINE TOTAL", "TOTAL AMOUNT"]
+    }
+    found_headers = {key: None for key in header_map}
+
+    for row in ws.iter_rows(min_row=1, max_row=50):
+        for cell in row:
+            if not cell.value:
+                continue
+            cell_value = str(cell.value).strip()
+            for mr in ws.merged_cells.ranges:
+                if cell.coordinate in mr:
+                    top_left = mr.coord.split(":")[0]
+                    cell_value = str(ws[top_left].value).strip()
+                    break
+            cell_text = cell_value.upper()
+
+            # Detect patient info
+            if "PATIENT" in cell_text and "patient_cell" not in pos:
+                pos["patient_cell"] = (cell.row, cell.column)
+            if "MEMBER" in cell_text and "member_cell" not in pos:
+                pos["member_cell"] = (cell.row, cell.column)
+            if ("PROVIDER" in cell_text or "EXAMINATION" in cell_text) and "provider_cell" not in pos:
+                pos["provider_cell"] = (cell.row, cell.column)
+            if "DATE" in cell_text and "date_cell" not in pos:
+                pos["date_cell"] = (cell.row, cell.column)
+
+            # Detect headers
+            for key, variants in header_map.items():
+                if found_headers[key] is not None:
+                    continue
+                for v in variants:
+                    if v.upper() in cell_text:
+                        found_headers[key] = cell.column
+                        break
+
+    cols = {k: v for k, v in found_headers.items() if v is not None}
+    pos["cols"] = cols
+
+    required = ["DESCRIPTION", "TARIFF", "MOD", "QTY", "FEES"]
+    missing = [col for col in required if col not in cols]
+    if "DESCRIPTION" in missing:
+        cols["DESCRIPTION"] = 1
+        missing.remove("DESCRIPTION")
+    if missing:
+        raise ValueError(f"Template missing required columns: {', '.join(missing)}")
+
+    return pos
+
+# Fill template
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill patient info
     if "patient_cell" in pos:
         r, c = pos["patient_cell"]
         replace_after_colon_in_same_cell(ws, r, c, patient)
@@ -206,22 +214,24 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         today_str = datetime.now().strftime("%d/%m/%Y")
         ws.cell(row=r+1, column=c, value=today_str)
 
-    if "cols" in pos:
-        start_row = 22  # always start DESCRIPTION at row 22
-        cols = pos["cols"]
+    start_row = 22
+    cols = pos.get("cols", {})
+    description_col = cols.get("DESCRIPTION", 1)
+    tariff_col = cols.get("TARIFF")
+    mod_col = cols.get("MOD")
+    qty_col = cols.get("QTY")
+    fees_col = cols.get("FEES")
 
-        # Write each scan on a single row
-        for idx, sr in enumerate(scan_rows):
-            rowptr = start_row + idx
-            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr.get("SCAN"))
-            write_safe(ws, rowptr, cols.get("TARIFF"), sr.get("TARIFF"))
-            write_safe(ws, rowptr, cols.get("MOD"), sr.get("MODIFIER") or "")
-            write_safe(ws, rowptr, cols.get("QTY"), sr.get("QTY"))        # Quantity column
-            write_safe(ws, rowptr, cols.get("FEES"), sr.get("AMOUNT"))    # Line amount column
+    for idx, sr in enumerate(scan_rows):
+        rowptr = start_row + idx
+        write_safe(ws, rowptr, description_col, sr.get("SCAN"))
+        if tariff_col: write_safe(ws, rowptr, tariff_col, sr.get("TARIFF"))
+        if mod_col: write_safe(ws, rowptr, mod_col, sr.get("MODIFIER") or "")
+        if qty_col: write_safe(ws, rowptr, qty_col, sr.get("QTY"))
+        if fees_col: write_safe(ws, rowptr, fees_col, sr.get("AMOUNT"))
 
-        # Force total to G22
-        total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
-        write_safe(ws, 22, 7, total_amt)  # column 7 = G
+    total_amt = sum([safe_float(r.get("AMOUNT", 0.0), 0.0) for r in scan_rows])
+    write_safe(ws, 22, 7, total_amt)  # G22
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -230,7 +240,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
 # ---------- Streamlit UI ----------
 st.title("Medical Quotation Generator — Full Tariff Capture")
-
 debug_mode = st.checkbox("Show parsing debug output", value=False)
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
@@ -245,7 +254,7 @@ if uploaded_charge:
         try:
             parsed = load_charge_sheet(uploaded_charge)
             st.session_state.parsed_df = parsed
-            st.session_state.selected_rows = []  # fill automatically
+            st.session_state.selected_rows = []
             st.success("Charge sheet parsed successfully.")
         except Exception as e:
             st.error(f"Failed to parse charge sheet: {e}")
@@ -253,7 +262,6 @@ if uploaded_charge:
 
 if "parsed_df" in st.session_state:
     df = st.session_state.parsed_df
-
     if debug_mode:
         st.write("Parsed DataFrame columns:", df.columns.tolist())
         st.dataframe(df.head(200))
