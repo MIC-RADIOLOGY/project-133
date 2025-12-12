@@ -162,15 +162,15 @@ def fill_excel_template(template_file, patient, member, provider, scan_type, row
 
     rowptr = 20
     for r in rows:
-        write_force(ws, rowptr, colmap["DESCRIPTION"], r["SCAN"])
-        write_force(ws, rowptr, colmap["TARIFF"], r["TARIFF"])
-        write_force(ws, rowptr, colmap["MODIFIER"], r["MODIFIER"])
-        write_force(ws, rowptr, colmap["QTY"], r["QTY"])
-        write_force(ws, rowptr, colmap["FEES"], r["FEES"])
-        write_force(ws, rowptr, colmap["AMOUNT"], r["AMOUNT"])
+        write_force(ws, rowptr, colmap["DESCRIPTION"], r.get("SCAN", ""))
+        write_force(ws, rowptr, colmap["TARIFF"], r.get("TARIFF", ""))
+        write_force(ws, rowptr, colmap["MODIFIER"], r.get("MODIFIER", ""))
+        write_force(ws, rowptr, colmap["QTY"], r.get("QTY", 1))
+        write_force(ws, rowptr, colmap["FEES"], r.get("FEES", 0.0))
+        write_force(ws, rowptr, colmap["AMOUNT"], r.get("AMOUNT", 0.0))
         rowptr += 1
 
-    total = sum(x["AMOUNT"] for x in rows)
+    total = sum(r.get("AMOUNT", 0.0) for r in rows)
     write_force(ws, 22, 7, total)
 
     out = io.BytesIO()
@@ -212,7 +212,10 @@ if st.session_state.parsed_rows:
     display_columns = [c for c in display_columns if c in df_preview.columns]
     st.dataframe(df_preview[display_columns].reset_index(drop=True), use_container_width=True)
 
-    options = [f"{r['INDEX']} — {r['SCAN']} — {r['TARIFF']}" for r in st.session_state.parsed_rows]
+    options = [
+        f"{r.get('INDEX', 0)} — {r.get('SCAN', '')} — {r.get('TARIFF', '')}"
+        for r in st.session_state.parsed_rows
+    ]
     default_opts = options.copy()
     chosen = st.multiselect("Select rows to include in quotation", options, default=default_opts)
 
@@ -227,14 +230,14 @@ if st.session_state.parsed_rows:
             continue
 
     for r in st.session_state.parsed_rows:
-        if r["INDEX"] in selected_indices:
+        if r.get("INDEX", -1) in selected_indices:
             selected_rows.append({
-                "SCAN": r["SCAN"],
-                "TARIFF": r["TARIFF"],
-                "MODIFIER": r["MODIFIER"],
-                "QTY": r["QTY"],
-                "FEES": r["FEES"],
-                "AMOUNT": r["AMOUNT"]
+                "SCAN": r.get("SCAN", ""),
+                "TARIFF": r.get("TARIFF", ""),
+                "MODIFIER": r.get("MODIFIER", ""),
+                "QTY": r.get("QTY", 1),
+                "FEES": r.get("FEES", 0.0),
+                "AMOUNT": r.get("AMOUNT", 0.0)
             })
 
     st.markdown(f"**Rows selected:** {len(selected_rows)}")
