@@ -32,7 +32,7 @@ def write_force(ws, row, col, value):
     cell.value = value
 
 # ------------------------------------------------------------
-# Parse charge sheet (robust + unique INDEX)
+# Parse charge sheet
 # ------------------------------------------------------------
 def parse_charge_sheet(uploaded_file):
     df_raw = pd.read_excel(uploaded_file, header=None, dtype=str)
@@ -46,6 +46,7 @@ def parse_charge_sheet(uploaded_file):
         "AMOUNT": ["AMOUNT", "AMT", "TOTAL", "COST"]
     }
 
+    # Detect header row
     header_row = None
     for i in range(len(df_raw)):
         row = [str(x).strip().upper() if pd.notna(x) else "" for x in df_raw.iloc[i].tolist()]
@@ -53,7 +54,6 @@ def parse_charge_sheet(uploaded_file):
         if found >= 3:
             header_row = i
             break
-
     if header_row is None:
         raise ValueError(
             "Could not locate a header row. Ensure the charge sheet contains a header like EXAMINATION / TARRIF / MODIFIER / QUANTITY / AMOUNT"
@@ -62,6 +62,7 @@ def parse_charge_sheet(uploaded_file):
     df = pd.read_excel(uploaded_file, header=header_row, dtype=str)
     df.columns = [str(c).strip().upper() for c in df.columns]
 
+    # Rename columns
     rename_map = {}
     for col in df.columns:
         u = col.strip().upper()
@@ -80,13 +81,12 @@ def parse_charge_sheet(uploaded_file):
 
     df = df.rename(columns=rename_map)
 
-    # Ensure all required columns exist
+    # Ensure required columns exist
     required = ["DESCRIPTION", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]
     for r in required:
         if r not in df.columns:
             df[r] = ""
 
-    # Fill FEES if missing
     if df["FEES"].eq("").all() and "AMOUNT" in df.columns:
         df["FEES"] = df["AMOUNT"]
 
@@ -115,14 +115,13 @@ def parse_charge_sheet(uploaded_file):
     df["FEES"] = df["FEES"].apply(to_number)
     df["AMOUNT"] = df["AMOUNT"].apply(to_number)
 
-    # Build rows with unique INDEX
+    # Build rows, skipping TOTAL / empty
     rows = []
     for r in df.itertuples(index=False):
         desc = str(getattr(r, "DESCRIPTION", "")).strip()
         if desc == "" or desc.upper() == "TOTAL":
             continue
         rows.append({
-            "INDEX": len(rows),  # unique index
             "SCAN": desc,
             "TARIFF": str(getattr(r, "TARIFF", "")).strip(),
             "MODIFIER": str(getattr(r, "MODIFIER", "")).strip(),
@@ -131,17 +130,12 @@ def parse_charge_sheet(uploaded_file):
             "AMOUNT": float(getattr(r, "AMOUNT", 0.0))
         })
 
-    # If no valid rows, add a default
+    # Assign unique sequential INDEX
+    for i, r in enumerate(rows):
+        r["INDEX"] = i
+
     if len(rows) == 0:
-        rows.append({
-            "INDEX": 0,
-            "SCAN": "",
-            "TARIFF": "",
-            "MODIFIER": "",
-            "QTY": 1,
-            "FEES": 0.0,
-            "AMOUNT": 0.0
-        })
+        rows.append({"INDEX": 0, "SCAN": "", "TARIFF": "", "MODIFIER": "", "QTY": 1, "FEES": 0.0, "AMOUNT": 0.0})
 
     return rows
 
@@ -153,12 +147,12 @@ def fill_excel_template(template_file, patient, member, provider, scan_type, row
     ws = workbook.active
 
     colmap = {
-        "DESCRIPTION": 1,  # A
-        "TARIFF": 2,       # B
-        "MODIFIER": 3,     # C
-        "QTY": 5,          # E
-        "FEES": 6,         # F
-        "AMOUNT": 7        # G
+        "DESCRIPTION": 1,
+        "TARIFF": 2,
+        "MODIFIER": 3,
+        "QTY": 5,
+        "FEES": 6,
+        "AMOUNT": 7
     }
 
     write_force(ws, 13, 2, f"FOR PATIENT: {patient}")
@@ -176,7 +170,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_type, row
         write_force(ws, rowptr, colmap["AMOUNT"], r["AMOUNT"])
         rowptr += 1
 
-    total = sum([float(x["AMOUNT"]) for x in rows])
+    total = sum(x["AMOUNT"] for x in rows)
     write_force(ws, 22, 7, total)
 
     out = io.BytesIO()
@@ -190,11 +184,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_type, row
 st.title("Medical Quotation Generator")
 
 template = st.file_uploader("Upload Excel Template", type=["xlsx"])
-charge = st.file_uploader("Upload Charge Sheet (UCS style)", type=["xlsx"])
+charge = st.file_uploader("Upload Charge Sheet", type=["xlsx"])
 patient = st.text_input("Patient Name")
 member = st.text_input("Member Number")
 provider = st.text_input("Provider / ATT")
-
 scan_type = st.selectbox("Select Scan Type for this Quotation", ["-- choose --"] + SCAN_TYPES)
 
 if "parsed_rows" not in st.session_state:
@@ -206,18 +199,6 @@ with col1:
     if charge and st.button("Parse Charge Sheet"):
         try:
             rows = parse_charge_sheet(charge)
-            # Sanitize rows: ensure all keys exist
-            for i, r in enumerate(rows):
-                for k in ["INDEX", "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]:
-                    if k not in r:
-                        if k == "INDEX":
-                            r[k] = i
-                        elif k in ["SCAN", "TARIFF", "MODIFIER"]:
-                            r[k] = ""
-                        elif k == "QTY":
-                            r[k] = 1
-                        else:
-                            r[k] = 0.0
             st.session_state.parsed_rows = rows
             st.success(f"Parsed {len(rows)} rows from charge sheet.")
         except Exception as e:
@@ -229,11 +210,9 @@ if st.session_state.parsed_rows:
     df_preview = pd.DataFrame(st.session_state.parsed_rows)
     display_columns = ["INDEX", "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]
     display_columns = [c for c in display_columns if c in df_preview.columns]
-    display_df = df_preview[display_columns].copy().reset_index(drop=True)
-    st.dataframe(display_df, use_container_width=True)
+    st.dataframe(df_preview[display_columns].reset_index(drop=True), use_container_width=True)
 
-    options = [f"{r.get('INDEX', 0)} — {r.get('SCAN', '')} — {r.get('TARIFF','')}" for r in st.session_state.parsed_rows]
-
+    options = [f"{r['INDEX']} — {r['SCAN']} — {r['TARIFF']}" for r in st.session_state.parsed_rows]
     default_opts = options.copy()
     chosen = st.multiselect("Select rows to include in quotation", options, default=default_opts)
 
@@ -248,18 +227,18 @@ if st.session_state.parsed_rows:
             continue
 
     for r in st.session_state.parsed_rows:
-        if r.get("INDEX", -1) in selected_indices:
+        if r["INDEX"] in selected_indices:
             selected_rows.append({
-                "SCAN": r.get("SCAN", ""),
-                "TARIFF": r.get("TARIFF", ""),
-                "MODIFIER": r.get("MODIFIER", ""),
-                "QTY": r.get("QTY", 1),
-                "FEES": r.get("FEES", 0.0),
-                "AMOUNT": r.get("AMOUNT", 0.0)
+                "SCAN": r["SCAN"],
+                "TARIFF": r["TARIFF"],
+                "MODIFIER": r["MODIFIER"],
+                "QTY": r["QTY"],
+                "FEES": r["FEES"],
+                "AMOUNT": r["AMOUNT"]
             })
 
     st.markdown(f"**Rows selected:** {len(selected_rows)}")
-    if len(selected_rows) > 0:
+    if selected_rows:
         st.dataframe(pd.DataFrame(selected_rows), use_container_width=True)
 
     with col2:
