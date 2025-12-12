@@ -42,6 +42,7 @@ def safe_float(x, default=0.0):
 def load_charge_sheet(file) -> pd.DataFrame:
     df_raw = pd.read_excel(file, header=None, dtype=object)
 
+    # Ensure at least 5 columns
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
     df_raw = df_raw.iloc[:, :5]
@@ -52,29 +53,43 @@ def load_charge_sheet(file) -> pd.DataFrame:
     current_subcategory = None
 
     for idx, r in df_raw.iterrows():
-        exam = clean_text(r["A_EXAM"])
-        if exam == "":
+        # Clean all text in the row
+        row_texts = [clean_text(r[col]) for col in ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]]
+
+        # Determine the scan name: first non-empty, non-garbage, non-tariff column
+        exam = None
+        for i, text in enumerate(row_texts):
+            if i in [1, 3, 4]:  # skip TARIFF, QTY, AMOUNT columns
+                continue
+            if text and text.upper() not in GARBAGE_KEYS:
+                exam = text
+                break
+        if not exam:
             continue
+
         exam_u = exam.upper()
 
+        # Category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
+        # Subcategory detection: empty tariff & amount
         tariff_blank = pd.isna(r["B_TARIFF"]) or str(r["B_TARIFF"]).strip() in ["", "nan", "NaN", "None"]
         amt_blank = pd.isna(r["E_AMOUNT"]) or str(r["E_AMOUNT"]).strip() in ["", "nan", "NaN", "None"]
         if tariff_blank and amt_blank:
             current_subcategory = exam
             continue
 
+        # Skip garbage rows
         if exam_u in GARBAGE_KEYS:
             continue
 
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
-            "SCAN": exam,
+            "SCAN": exam,  # guaranteed to be scan name
             "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
@@ -182,7 +197,8 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
         for idx, sr in enumerate(scan_rows):
             rowptr = start_row + idx
-            write_safe(ws, rowptr, desc_col, sr.get("SCAN"))
+            scan_name = sr.get("SCAN")  # always scan name
+            write_safe(ws, rowptr, desc_col, scan_name)
             write_safe(ws, rowptr, tariff_col, sr.get("TARIFF"))
             write_safe(ws, rowptr, mod_col, sr.get("MODIFIER") or "")
             write_safe(ws, rowptr, qty_col, sr.get("QTY"))
