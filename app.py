@@ -32,7 +32,7 @@ def write_force(ws, row, col, value):
     cell.value = value
 
 # ------------------------------------------------------------
-# Parse charge sheet (robust + guaranteed columns)
+# Parse charge sheet (robust + unique INDEX)
 # ------------------------------------------------------------
 def parse_charge_sheet(uploaded_file):
     df_raw = pd.read_excel(uploaded_file, header=None, dtype=str)
@@ -115,23 +115,23 @@ def parse_charge_sheet(uploaded_file):
     df["FEES"] = df["FEES"].apply(to_number)
     df["AMOUNT"] = df["AMOUNT"].apply(to_number)
 
-    # Build rows
+    # Build rows with unique INDEX
     rows = []
-    for idx, r in df.iterrows():
-        desc = str(r["DESCRIPTION"]).strip()
+    for r in df.itertuples(index=False):
+        desc = str(getattr(r, "DESCRIPTION", "")).strip()
         if desc == "" or desc.upper() == "TOTAL":
             continue
         rows.append({
-            "INDEX": int(idx),
+            "INDEX": len(rows),  # unique index
             "SCAN": desc,
-            "TARIFF": str(r.get("TARIFF", "")).strip(),
-            "MODIFIER": str(r.get("MODIFIER", "")).strip(),
-            "QTY": int(r.get("QTY", 1)),
-            "FEES": float(r.get("FEES", 0.0)),
-            "AMOUNT": float(r.get("AMOUNT", 0.0))
+            "TARIFF": str(getattr(r, "TARIFF", "")).strip(),
+            "MODIFIER": str(getattr(r, "MODIFIER", "")).strip(),
+            "QTY": int(getattr(r, "QTY", 1)),
+            "FEES": float(getattr(r, "FEES", 0.0)),
+            "AMOUNT": float(getattr(r, "AMOUNT", 0.0))
         })
 
-    # Ensure at least one row exists
+    # If no valid rows, add a default
     if len(rows) == 0:
         rows.append({
             "INDEX": 0,
@@ -206,13 +206,13 @@ with col1:
     if charge and st.button("Parse Charge Sheet"):
         try:
             rows = parse_charge_sheet(charge)
-            # Sanitize rows: ensure all required keys exist
+            # Sanitize rows: ensure all keys exist
             for i, r in enumerate(rows):
                 for k in ["INDEX", "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]:
                     if k not in r:
                         if k == "INDEX":
                             r[k] = i
-                        elif k == "SCAN" or k == "TARIFF" or k == "MODIFIER":
+                        elif k in ["SCAN", "TARIFF", "MODIFIER"]:
                             r[k] = ""
                         elif k == "QTY":
                             r[k] = 1
@@ -232,12 +232,7 @@ if st.session_state.parsed_rows:
     display_df = df_preview[display_columns].copy().reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True)
 
-    options = []
-    for r in st.session_state.parsed_rows:
-        index = r.get("INDEX", 0)
-        scan = r.get("SCAN", "")
-        tariff = r.get("TARIFF", "")
-        options.append(f"{index} — {scan} — {tariff}")
+    options = [f"{r.get('INDEX', 0)} — {r.get('SCAN', '')} — {r.get('TARIFF','')}" for r in st.session_state.parsed_rows]
 
     default_opts = options.copy()
     chosen = st.multiselect("Select rows to include in quotation", options, default=default_opts)
