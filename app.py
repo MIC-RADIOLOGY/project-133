@@ -55,7 +55,9 @@ def parse_charge_sheet(uploaded_file):
             break
 
     if header_row is None:
-        raise ValueError("Could not locate a header row. Ensure the charge sheet contains a header like EXAMINATION / TARRIF / MODIFIER / QUANTITY / AMOUNT")
+        raise ValueError(
+            "Could not locate a header row. Ensure the charge sheet contains a header like EXAMINATION / TARRIF / MODIFIER / QUANTITY / AMOUNT"
+        )
 
     df = pd.read_excel(uploaded_file, header=header_row, dtype=str)
     df.columns = [str(c).strip().upper() for c in df.columns]
@@ -122,11 +124,11 @@ def parse_charge_sheet(uploaded_file):
         rows.append({
             "INDEX": int(idx),
             "SCAN": desc,
-            "TARIFF": str(r.get("TARIFF","")).strip(),
-            "MODIFIER": str(r.get("MODIFIER","")).strip(),
-            "QTY": int(r.get("QTY",1)),
-            "FEES": float(r.get("FEES",0.0)),
-            "AMOUNT": float(r.get("AMOUNT",0.0))
+            "TARIFF": str(r.get("TARIFF", "")).strip(),
+            "MODIFIER": str(r.get("MODIFIER", "")).strip(),
+            "QTY": int(r.get("QTY", 1)),
+            "FEES": float(r.get("FEES", 0.0)),
+            "AMOUNT": float(r.get("AMOUNT", 0.0))
         })
 
     # Ensure at least one row exists
@@ -198,12 +200,24 @@ scan_type = st.selectbox("Select Scan Type for this Quotation", ["-- choose --"]
 if "parsed_rows" not in st.session_state:
     st.session_state.parsed_rows = None
 
-col1, col2 = st.columns([1,1])
+col1, col2 = st.columns([1, 1])
 
 with col1:
     if charge and st.button("Parse Charge Sheet"):
         try:
             rows = parse_charge_sheet(charge)
+            # Sanitize rows: ensure all required keys exist
+            for i, r in enumerate(rows):
+                for k in ["INDEX", "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]:
+                    if k not in r:
+                        if k == "INDEX":
+                            r[k] = i
+                        elif k == "SCAN" or k == "TARIFF" or k == "MODIFIER":
+                            r[k] = ""
+                        elif k == "QTY":
+                            r[k] = 1
+                        else:
+                            r[k] = 0.0
             st.session_state.parsed_rows = rows
             st.success(f"Parsed {len(rows)} rows from charge sheet.")
         except Exception as e:
@@ -213,15 +227,18 @@ with col1:
 if st.session_state.parsed_rows:
     st.subheader("Parsed Charge Sheet Preview")
     df_preview = pd.DataFrame(st.session_state.parsed_rows)
-
-    # Safe display: only show existing columns
     display_columns = ["INDEX", "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT"]
     display_columns = [c for c in display_columns if c in df_preview.columns]
-    display_df = df_preview[display_columns].copy()
-    display_df = display_df.reset_index(drop=True)
+    display_df = df_preview[display_columns].copy().reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True)
 
-    options = [f"{r['INDEX']} — {r['SCAN']} — {r['TARIFF']}" for r in st.session_state.parsed_rows]
+    options = []
+    for r in st.session_state.parsed_rows:
+        index = r.get("INDEX", 0)
+        scan = r.get("SCAN", "")
+        tariff = r.get("TARIFF", "")
+        options.append(f"{index} — {scan} — {tariff}")
+
     default_opts = options.copy()
     chosen = st.multiselect("Select rows to include in quotation", options, default=default_opts)
 
@@ -236,14 +253,14 @@ if st.session_state.parsed_rows:
             continue
 
     for r in st.session_state.parsed_rows:
-        if r["INDEX"] in selected_indices:
+        if r.get("INDEX", -1) in selected_indices:
             selected_rows.append({
-                "SCAN": r["SCAN"],
-                "TARIFF": r["TARIFF"],
-                "MODIFIER": r["MODIFIER"],
-                "QTY": r["QTY"],
-                "FEES": r["FEES"],
-                "AMOUNT": r["AMOUNT"]
+                "SCAN": r.get("SCAN", ""),
+                "TARIFF": r.get("TARIFF", ""),
+                "MODIFIER": r.get("MODIFIER", ""),
+                "QTY": r.get("QTY", 1),
+                "FEES": r.get("FEES", 0.0),
+                "AMOUNT": r.get("AMOUNT", 0.0)
             })
 
     st.markdown(f"**Rows selected:** {len(selected_rows)}")
@@ -266,6 +283,5 @@ if st.session_state.parsed_rows:
                     st.error(f"Error generating quotation: {e}")
         else:
             st.info("Upload Template, fill Patient/Member/Provider, choose Scan Type, and select rows to enable Generate.")
-
 else:
     st.info("Upload a charge sheet and press 'Parse Charge Sheet' to preview rows.")
