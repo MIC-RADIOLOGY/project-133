@@ -56,14 +56,21 @@ def load_charge_sheet(file) -> pd.DataFrame:
         # Clean all text in the row
         row_texts = [clean_text(r[col]) for col in ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]]
 
-        # Determine the scan name: first non-empty, non-garbage, non-tariff column
+        # Determine the scan name: first non-empty, non-garbage, non-numeric column
         exam = None
         for i, text in enumerate(row_texts):
             if i in [1, 3, 4]:  # skip TARIFF, QTY, AMOUNT columns
                 continue
             if text and text.upper() not in GARBAGE_KEYS:
+                # ignore numeric-looking text
+                try:
+                    float(text.replace(",", "").replace("$", ""))
+                    continue  # it's a number, skip
+                except Exception:
+                    pass
                 exam = text
                 break
+
         if not exam:
             continue
 
