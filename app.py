@@ -4,7 +4,6 @@ import pandas as pd
 import openpyxl
 import io
 from datetime import datetime
-from typing import Optional
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
@@ -17,12 +16,12 @@ MAIN_CATEGORIES = {
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 # ---------- Helpers ----------
-def clean_text(x) -> str:
+def clean_text(x):
     if pd.isna(x):
         return ""
     return str(x).replace("\xa0", " ").strip()
 
-def u(x) -> str:
+def u(x):
     return clean_text(x).upper()
 
 def safe_int(x, default=1):
@@ -38,7 +37,7 @@ def safe_float(x, default=0.0):
         return default
 
 # ---------- Parser ----------
-def load_charge_sheet(file) -> pd.DataFrame:
+def load_charge_sheet(file):
     df_raw = pd.read_excel(file, header=None, dtype=object)
 
     while df_raw.shape[1] < 5:
@@ -78,10 +77,7 @@ def load_charge_sheet(file) -> pd.DataFrame:
         if exam_u in GARBAGE_KEYS:
             continue
 
-        tariff_blank = clean_text(r["B_TARIFF"]) == ""
-        amount_blank = clean_text(r["E_AMOUNT"]) == ""
-
-        if tariff_blank and amount_blank:
+        if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
             current_subcategory = exam
             continue
 
@@ -119,7 +115,6 @@ def append_after_label(ws, r, c, label, value):
         cell.value = value
 
 def write_below_label(ws, r, c, value):
-    """Write value in the cell directly below (preserves label above)."""
     if not value:
         return
     target = ws.cell(row=r + 1, column=c)
@@ -149,7 +144,6 @@ def find_template_positions(ws):
             if ("PROVIDER" in t or "MEDICAL AID" in t) and "provider_cell" not in pos:
                 pos["provider_cell"] = (cell.row, cell.column)
 
-            # Exact DATE label only (prevents UPDATE / VALIDITY DATE)
             if t.strip() == "DATE" and "date_cell" not in pos:
                 pos["date_cell"] = (cell.row, cell.column)
 
@@ -167,35 +161,28 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # --- Header fields ---
     if "patient_cell" in pos:
-        r, c = pos["patient_cell"]
-        append_after_label(ws, r, c, "PATIENT", patient)
+        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
 
     if "member_cell" in pos:
-        r, c = pos["member_cell"]
-        append_after_label(ws, r, c, "MEMBER", member)
+        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
 
     if "provider_cell" in pos:
-        r, c = pos["provider_cell"]
-        append_after_label(ws, r, c, "PROVIDER", provider)
+        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
 
-    # --- DATE (below label) ---
-    today_str = datetime.today().strftime("%d %b %Y")
+    # --- DATE below label, numeric ---
+    today_numeric = datetime.today().strftime("%d/%m/%Y")
     if "date_cell" in pos:
-        r, c = pos["date_cell"]
-        write_below_label(ws, r, c, today_str)
+        write_below_label(ws, *pos["date_cell"], today_numeric)
 
-    # --- Table ---
     if "table_start_row" in pos and "cols" in pos:
         rowptr = pos["table_start_row"]
-        cols = pos["cols"]
         for sr in scan_rows:
-            write_safe(ws, rowptr, cols.get("DESCRIPTION"), sr["SCAN"])
-            write_safe(ws, rowptr, cols.get("TARRIF"), sr["TARIFF"])
-            write_safe(ws, rowptr, cols.get("MOD"), sr["MODIFIER"])
-            write_safe(ws, rowptr, cols.get("QTY"), sr["QTY"])
-            write_safe(ws, rowptr, cols.get("FEES"), sr["AMOUNT"])
+            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
+            write_safe(ws, rowptr, pos["cols"].get("TARRIF"), sr["TARIFF"])
+            write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
+            write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
+            write_safe(ws, rowptr, pos["cols"].get("FEES"), sr["AMOUNT"])
             rowptr += 1
 
     buf = io.BytesIO()
@@ -220,43 +207,40 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
 if "df" in st.session_state:
     df = st.session_state.df
     categories = sorted(df["CATEGORY"].dropna().unique())
-    if not categories:
-        st.warning("No categories detected.")
-    else:
-        main_sel = st.selectbox("Select Main Category", categories)
-        subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
 
-        if subcats:
-            sub_sel = st.selectbox("Select Subcategory", subcats)
-            scans = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-        else:
-            scans = df[df["CATEGORY"] == main_sel]
+    main_sel = st.selectbox("Select Main Category", categories)
+    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
 
-        scans = scans.reset_index(drop=True)
-        scans["label"] = scans.apply(
-            lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}", axis=1
-        )
+    scans = (
+        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == st.selectbox("Select Subcategory", subcats))]
+        if subcats else df[df["CATEGORY"] == main_sel]
+    )
 
-        selected = st.multiselect(
-            "Select scans to include",
-            options=list(range(len(scans))),
-            format_func=lambda i: scans.at[i, "label"]
-        )
+    scans = scans.reset_index(drop=True)
+    scans["label"] = scans.apply(
+        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}", axis=1
+    )
 
-        selected_rows = [scans.iloc[i].to_dict() for i in selected]
+    selected = st.multiselect(
+        "Select scans to include",
+        options=list(range(len(scans))),
+        format_func=lambda i: scans.at[i, "label"]
+    )
 
-        if selected_rows:
-            st.dataframe(pd.DataFrame(selected_rows)[
-                ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
-            ])
+    selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
-            if uploaded_template and st.button("Generate & Download Quotation"):
-                out = fill_excel_template(
-                    uploaded_template, patient, member, provider, selected_rows
-                )
-                st.download_button(
-                    "Download Quotation",
-                    data=out,
-                    file_name=f"quotation_{patient or 'patient'}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+    if selected_rows:
+        st.dataframe(pd.DataFrame(selected_rows)[
+            ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
+        ])
+
+        if uploaded_template and st.button("Generate & Download Quotation"):
+            out = fill_excel_template(
+                uploaded_template, patient, member, provider, selected_rows
+            )
+            st.download_button(
+                "Download Quotation",
+                data=out,
+                file_name=f"quotation_{patient or 'patient'}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
