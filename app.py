@@ -1,214 +1,90 @@
-# app.py
 import streamlit as st
 import pandas as pd
-import openpyxl
-import io
 from datetime import datetime
+import io
+import xlwings as xw
 
-st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
+# ---------------------------
+# Keep your existing parser / helpers
+# ---------------------------
+# (Assume load_charge_sheet and other helper functions are unchanged)
 
-# ------------------------------------------------------------
-# CONFIG
-# ------------------------------------------------------------
-COMPONENT_KEYS = {
-    "PELVIS", "CONSUMABLES", "FF",
-    "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
-}
+# ---------------------------
+# XLWINGS TEMPLATE FILL
+# ---------------------------
+def fill_excel_template_xlwings(template_file, patient, member, provider, scan_rows):
+    app = xw.App(visible=False)
+    wb = xw.Book(template_file)
+    ws = wb.sheets[0]
 
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
+    def find_cell(containing):
+        for cell in ws.used_range:
+            if cell.value and containing.upper() in str(cell.value).upper():
+                return cell
+        return None
 
-MAIN_CATEGORIES = set()
+    patient_cell = find_cell("PATIENT")
+    member_cell = find_cell("MEMBER")
+    provider_cell = find_cell("PROVIDER")
+    date_cell = find_cell("DATE")
 
-# ------------------------------------------------------------
-# HELPERS
-# ------------------------------------------------------------
-def clean_text(x):
-    if pd.isna(x):
-        return ""
-    return str(x).replace("\xa0", " ").strip()
+    if patient_cell:
+        patient_cell.offset(1, 0).value = patient
+    if member_cell:
+        member_cell.offset(1, 0).value = member
+    if provider_cell:
+        provider_cell.offset(1, 0).value = provider
+    if date_cell:
+        date_cell.offset(1, 0).value = datetime.today().strftime("%d/%m/%Y")
 
-def safe_int(x, default=1):
-    try:
-        return int(float(str(x).replace(",", "").strip()))
-    except Exception:
-        return default
-
-def safe_float(x, default=0.0):
-    try:
-        return float(str(x).replace(",", "").strip())
-    except Exception:
-        return default
-
-# ------------------------------------------------------------
-# PARSER
-# ------------------------------------------------------------
-def load_charge_sheet(file):
-    df_raw = pd.read_excel(file, header=None, dtype=object)
-
-    while df_raw.shape[1] < 5:
-        df_raw[df_raw.shape[1]] = None
-
-    df_raw = df_raw.iloc[:, :5]
-    df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
-
-    structured = []
-    current_category = None
-    current_subcategory = None
-
-    for _, r in df_raw.iterrows():
-        exam = clean_text(r["A_EXAM"])
-        if not exam:
-            continue
-
-        exam_u = exam.upper().strip()
-
-        if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
-            MAIN_CATEGORIES.add(exam_u)
-            current_category = exam
-            current_subcategory = None
-            continue
-
-        if exam_u in GARBAGE_KEYS:
-            continue
-
-        if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
-            current_subcategory = exam
-            continue
-
-        if not current_category:
-            continue
-
-        is_main_scan = exam_u not in COMPONENT_KEYS
-
-        structured.append({
-            "CATEGORY": current_category,
-            "SUBCATEGORY": current_subcategory,
-            "SCAN": exam,
-            "IS_MAIN_SCAN": is_main_scan,
-            "TARIFF": safe_float(r["B_TARIFF"], None),
-            "MODIFIER": str(clean_text(r["C_MOD"])),
-            "QTY": safe_int(r["D_QTY"], 1),
-            "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
-        })
-
-    return pd.DataFrame(structured)
-
-# ------------------------------------------------------------
-# EXCEL HELPERS
-# ------------------------------------------------------------
-def write_safe(ws, r, c, value):
-    if not c:
-        return
-    cell = ws.cell(row=r, column=c)
-    try:
-        cell.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
-                return
-
-def append_after_label(ws, r, c, label, value):
-    if not value:
-        return
-    cell = ws.cell(row=r, column=c)
-    existing = str(cell.value) if cell.value else ""
-    cell.value = f"{existing.strip()} {value}".strip()
-
-def write_below_label(ws, r, c, value):
-    target = ws.cell(row=r + 1, column=c)
-    try:
-        target.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if target.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
-                return
-
-def find_template_positions(ws):
-    pos = {}
     headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
+    table_start_row = 22
+    for cell in ws.used_range:
+        if cell.value and any(h in str(cell.value).upper() for h in headers):
+            table_start_row = cell.row + 1
+            break
 
-    for row in ws.iter_rows(min_row=1, max_row=200):
-        for cell in row:
-            if not cell.value:
-                continue
-
+    col_map = {}
+    for cell in ws.used_range:
+        if cell.value:
             t = str(cell.value).upper()
+            for h in headers:
+                if h in t:
+                    col_map[h] = cell.column
 
-            if "PATIENT" in t:
-                pos.setdefault("patient_cell", (cell.row, cell.column))
-            if "MEMBER" in t:
-                pos.setdefault("member_cell", (cell.row, cell.column))
-            if "PROVIDER" in t or "MEDICAL AID" in t:
-                pos.setdefault("provider_cell", (cell.row, cell.column))
-            if t.strip() == "DATE":
-                pos.setdefault("date_cell", (cell.row, cell.column))
-
-            if any(h in t for h in headers):
-                pos.setdefault("cols", {})
-                pos.setdefault("table_start_row", cell.row + 1)
-                for h in headers:
-                    if h in t:
-                        pos["cols"][h] = cell.column
-    return pos
-
-# ------------------------------------------------------------
-# TEMPLATE FILL
-# ------------------------------------------------------------
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
-    wb = openpyxl.load_workbook(template_file)
-    ws = wb.active
-    pos = find_template_positions(ws)
-
-    if "patient_cell" in pos:
-        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
-
-    if "member_cell" in pos:
-        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
-
-    if "provider_cell" in pos:
-        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
-
-    if "date_cell" in pos:
-        write_below_label(ws, *pos["date_cell"],
-                          datetime.today().strftime("%d/%m/%Y"))
-
-    rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
-
+    rowptr = table_start_row
     for sr in scan_rows:
-        # Indent component scans
-        if sr["IS_MAIN_SCAN"]:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
-        else:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), "   " + sr["SCAN"])
-
-        write_safe(ws, rowptr,
-                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-                   sr["TARIFF"])
-
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
+        desc = sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
+        ws.cells(rowptr, col_map.get("DESCRIPTION")).value = desc
+        tariff_col = col_map.get("TARIFF") or col_map.get("TARRIF")
+        ws.cells(rowptr, tariff_col).value = sr["TARIFF"]
+        ws.cells(rowptr, col_map.get("MOD")).value = sr["MODIFIER"]
+        ws.cells(rowptr, col_map.get("QTY")).value = sr["QTY"]
 
         fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(fees, 2))
+        ws.cells(rowptr, col_map.get("FEES")).value = round(fees, 2)
 
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
+    if "AMOUNT" in col_map:
+        ws.cells(table_start_row, col_map["AMOUNT"]).value = round(grand_total, 2)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
+    # Save to BytesIO
+    temp_file = f"temp_{datetime.now().timestamp()}.xlsx"
+    wb.save(temp_file)
+    wb.close()
+    app.quit()
 
-# ------------------------------------------------------------
+    with open(temp_file, "rb") as f:
+        out = io.BytesIO(f.read())
+    out.seek(0)
+    return out
+
+# ---------------------------
 # STREAMLIT UI
-# ------------------------------------------------------------
+# ---------------------------
 st.title("Medical Quotation Generator")
 
 uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
@@ -272,7 +148,7 @@ if "df" in st.session_state:
                 if c.isalnum() or c in (" ", "_")
             ).strip()
 
-            out = fill_excel_template(
+            out = fill_excel_template_xlwings(
                 uploaded_template, patient, member, provider, selected_rows
             )
 
