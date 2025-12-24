@@ -103,9 +103,11 @@ def write_safe(ws, r, c, value):
     try:
         cell.value = value
     except Exception:
+        # Handle merged cells
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
-                ws[mr.coord.split(":")[0]].value = value
+                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
+                start_cell.value = value
                 return
 
 def append_after_label(ws, r, c, label, value):
@@ -122,7 +124,8 @@ def write_below_label(ws, r, c, value):
     except Exception:
         for mr in ws.merged_cells.ranges:
             if target.coordinate in mr:
-                ws[mr.coord.split(":")[0]].value = value
+                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
+                start_cell.value = value
                 return
 
 def find_template_positions(ws):
@@ -154,7 +157,7 @@ def find_template_positions(ws):
     return pos
 
 # ------------------------------------------------------------
-# TEMPLATE FILL (LOCKED LOGIC)
+# TEMPLATE FILL
 # ------------------------------------------------------------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
@@ -178,6 +181,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
+        # Always write exact DESCRIPTION for main scans
         if sr["IS_MAIN_SCAN"]:
             write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
 
@@ -194,7 +198,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    # ✅ ONLY ONE TOTAL — CELL G22
+    # ONLY ONE TOTAL — CELL G22
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
