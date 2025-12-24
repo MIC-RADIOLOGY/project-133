@@ -86,7 +86,7 @@ def load_charge_sheet(file):
             "SCAN": exam,
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
             "TARIFF": safe_float(r["B_TARIFF"], None),
-            "MODIFIER": clean_text(r["C_MOD"]),  # exact modifier
+            "MODIFIER": str(clean_text(r["C_MOD"])),  # EXACT modifier e.g. 25
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
         })
@@ -108,7 +108,9 @@ def write_safe(ws, r, c, value):
                 ws[mr.coord.split(":")[0]].value = value
                 return
 
-def append_after_label(ws, r, c, value):
+def append_after_label(ws, r, c, label, value):
+    if not value:
+        return
     cell = ws.cell(row=r, column=c)
     existing = str(cell.value) if cell.value else ""
     cell.value = f"{existing.strip()} {value}".strip()
@@ -123,57 +125,36 @@ def write_below_label(ws, r, c, value):
                 ws[mr.coord.split(":")[0]].value = value
                 return
 
-# ------------------------------------------------------------
-# TEMPLATE SCAN (FIXED MODIFIER DETECTION)
-# ------------------------------------------------------------
 def find_template_positions(ws):
     pos = {}
-    headers = [
-        "DESCRIPTION",
-        "TARIFF", "TARRIF",
-        "MOD", "MODIFIER", "MOD %",
-        "QTY",
-        "FEES",
-        "AMOUNT"
-    ]
+    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
 
     for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
             if not cell.value:
                 continue
 
-            t = str(cell.value).upper().strip()
+            t = str(cell.value).upper()
 
             if "PATIENT" in t:
                 pos.setdefault("patient_cell", (cell.row, cell.column))
-            elif "MEMBER" in t:
+            if "MEMBER" in t:
                 pos.setdefault("member_cell", (cell.row, cell.column))
-            elif "PROVIDER" in t or "MEDICAL AID" in t:
+            if "PROVIDER" in t or "MEDICAL AID" in t:
                 pos.setdefault("provider_cell", (cell.row, cell.column))
-            elif t == "DATE":
+            if t.strip() == "DATE":
                 pos.setdefault("date_cell", (cell.row, cell.column))
 
             if any(h in t for h in headers):
                 pos.setdefault("cols", {})
                 pos.setdefault("table_start_row", cell.row + 1)
-
-                if "DESCRIPTION" in t:
-                    pos["cols"]["DESCRIPTION"] = cell.column
-                elif "TARIFF" in t or "TARRIF" in t:
-                    pos["cols"]["TARIFF"] = cell.column
-                elif "MOD" in t:
-                    pos["cols"]["MOD"] = cell.column
-                elif "QTY" in t:
-                    pos["cols"]["QTY"] = cell.column
-                elif "FEES" in t:
-                    pos["cols"]["FEES"] = cell.column
-                elif "AMOUNT" in t:
-                    pos["cols"]["AMOUNT"] = cell.column
-
+                for h in headers:
+                    if h in t:
+                        pos["cols"][h] = cell.column
     return pos
 
 # ------------------------------------------------------------
-# TEMPLATE FILL
+# TEMPLATE FILL (LOCKED LOGIC)
 # ------------------------------------------------------------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
@@ -181,13 +162,13 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     pos = find_template_positions(ws)
 
     if "patient_cell" in pos:
-        append_after_label(ws, *pos["patient_cell"], patient)
+        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
 
     if "member_cell" in pos:
-        append_after_label(ws, *pos["member_cell"], member)
+        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
 
     if "provider_cell" in pos:
-        append_after_label(ws, *pos["provider_cell"], provider)
+        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
 
     if "date_cell" in pos:
         write_below_label(ws, *pos["date_cell"],
@@ -200,12 +181,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         if sr["IS_MAIN_SCAN"]:
             write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
 
-        write_safe(ws, rowptr, pos["cols"].get("TARIFF"), sr["TARIFF"])
+        write_safe(ws, rowptr,
+                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
+                   sr["TARIFF"])
 
-        mod_col = pos["cols"].get("MOD")
-        if mod_col is not None:
-            write_safe(ws, rowptr, mod_col, sr["MODIFIER"])
-
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
         fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
@@ -214,7 +194,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    # ONLY total in G22 (Amount column)
+    # ✅ ONLY ONE TOTAL — CELL G22
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
