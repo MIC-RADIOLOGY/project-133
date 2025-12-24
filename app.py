@@ -4,237 +4,178 @@ import openpyxl
 import io
 from datetime import datetime
 
+# ================= CONFIG =================
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# ---------- Config / heuristics ----------
 MAIN_CATEGORIES = {
-    "ULTRA SOUND DOPPLERS", "ULTRA SOUND", "CT SCAN",
-    "FLUROSCOPY", "X-RAY", "XRAY", "ULTRASOUND"
+    "ULTRA SOUND", "ULTRASOUND", "CT SCAN", "X-RAY", "XRAY", "FLUROSCOPY"
 }
 
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
+GARBAGE_KEYS = {
+    "TOTAL", "SUB TOTAL", "GRAND TOTAL",
+    "CO", "CO PAY", "CO-PAY", "CO PAYMENT"
+}
 
-# ---------- Helpers ----------
-def clean_text(x):
+# ================= UTILITIES =================
+def clean(x):
     if pd.isna(x):
         return ""
     return str(x).replace("\xa0", " ").strip()
 
-def u(x):
-    return clean_text(x).upper()
+def norm(x):
+    return clean(x).upper()
 
 def safe_int(x, default=1):
     try:
-        return int(float(str(x).replace(",", "").strip()))
-    except Exception:
+        return int(float(str(x).replace(",", "")))
+    except:
         return default
 
 def safe_float(x, default=0.0):
     try:
-        return float(str(x).replace(",", "").strip())
-    except Exception:
+        return float(str(x).replace(",", "")))
+    except:
         return default
 
-# ---------- Parser ----------
+# ================= PARSER =================
 def load_charge_sheet(file):
-    df_raw = pd.read_excel(file, header=None, dtype=object)
+    df = pd.read_excel(file, header=None, dtype=object)
+    while df.shape[1] < 5:
+        df[df.shape[1]] = None
 
-    while df_raw.shape[1] < 5:
-        df_raw[df_raw.shape[1]] = None
+    df = df.iloc[:, :5]
+    df.columns = ["EXAM", "TARIFF", "MOD", "QTY", "AMOUNT"]
 
-    df_raw = df_raw.iloc[:, :5]
-    df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
+    rows = []
+    current_cat = None
+    current_sub = None
 
-    structured = []
-    current_category = None
-    current_subcategory = None
-
-    for _, r in df_raw.iterrows():
-        exam = clean_text(r["A_EXAM"])
+    for _, r in df.iterrows():
+        exam = clean(r.EXAM)
         if not exam:
             continue
 
         exam_u = exam.upper()
 
-        if exam_u in MAIN_CATEGORIES:
-            current_category = exam
-            current_subcategory = None
+        if any(k in exam_u for k in GARBAGE_KEYS):
             continue
 
-        if exam_u == "FF":
-            structured.append({
-                "CATEGORY": current_category,
-                "SUBCATEGORY": current_subcategory,
-                "SCAN": "FF",
-                "TARIFF": safe_float(r["B_TARIFF"], None),
-                "MODIFIER": "",
-                "QTY": safe_int(r["D_QTY"], 1),
-                "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
-            })
+        if any(cat in exam_u for cat in MAIN_CATEGORIES):
+            current_cat = exam
+            current_sub = None
             continue
 
-        if exam_u in GARBAGE_KEYS:
+        # Subcategory heuristic
+        if (
+            clean(r.AMOUNT) == "" and
+            clean(r.QTY) == "" and
+            not any(c.isdigit() for c in exam)
+        ):
+            current_sub = exam
             continue
 
-        if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
-            current_subcategory = exam
-            continue
+        qty = safe_int(r.QTY, 1)
+        tariff = safe_float(r.TARIFF, 0.0)
+        amount = tariff * qty
 
-        structured.append({
-            "CATEGORY": current_category,
-            "SUBCATEGORY": current_subcategory,
+        rows.append({
+            "CATEGORY": current_cat,
+            "SUBCATEGORY": current_sub,
             "SCAN": exam,
-            "TARIFF": safe_float(r["B_TARIFF"], None),
-            "MODIFIER": clean_text(r["C_MOD"]),
-            "QTY": safe_int(r["D_QTY"], 1),
-            "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
+            "TARIFF": tariff,
+            "MODIFIER": clean(r.MOD),
+            "QTY": qty,
+            "AMOUNT": amount
         })
 
-    return pd.DataFrame(structured)
+    return pd.DataFrame(rows)
 
-# ---------- Excel helpers ----------
-def write_safe(ws, r, c, value):
-    cell = ws.cell(row=r, column=c)
-    try:
-        cell.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                ws[mr.coord.split(":")[0]].value = value
-                return
+# ================= EXCEL WRITER =================
+def fill_excel_template(template, patient, member, provider, rows):
+    wb = openpyxl.load_workbook(template)
+    ws = wb.active
 
-def append_after_label(ws, r, c, label, value):
-    if not value:
-        return
-    cell = ws.cell(row=r, column=c)
-    existing = str(cell.value) if cell.value else ""
-    if label.upper() in existing.upper():
-        cell.value = f"{existing.strip()} {value}"
-    else:
-        cell.value = value
+    # Find headers
+    col_map = {}
+    start_row = None
 
-def write_below_label(ws, r, c, value):
-    if not value:
-        return
-    target = ws.cell(row=r + 1, column=c)
-    try:
-        target.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if target.coordinate in mr:
-                ws[mr.coord.split(":")[0]].value = value
-                return
-
-def find_template_positions(ws):
-    pos = {}
-    for row in ws.iter_rows(min_row=1, max_row=200):
+    for row in ws.iter_rows(max_row=200):
         for cell in row:
             if not cell.value:
                 continue
+            t = norm(cell.value)
 
-            t = u(cell.value)
+            if "DESCRIPTION" in t:
+                col_map["SCAN"] = cell.column
+                start_row = cell.row + 1
+            elif "TARRIF" in t or "TARIFF" in t:
+                col_map["TARIFF"] = cell.column
+            elif "MOD" in t:
+                col_map["MODIFIER"] = cell.column
+            elif "QTY" in t:
+                col_map["QTY"] = cell.column
+            elif "AMOUNT" in t or "FEES" in t:
+                col_map["AMOUNT"] = cell.column
 
-            if "PATIENT" in t and "patient_cell" not in pos:
-                pos["patient_cell"] = (cell.row, cell.column)
+    r = start_row
+    for row in rows:
+        ws.cell(r, col_map["SCAN"]).value = row["SCAN"]
+        ws.cell(r, col_map["TARIFF"]).value = row["TARIFF"]
+        ws.cell(r, col_map["MODIFIER"]).value = row["MODIFIER"]
+        ws.cell(r, col_map["QTY"]).value = row["QTY"]
+        ws.cell(r, col_map["AMOUNT"]).value = row["AMOUNT"]
+        r += 1
 
-            if "MEMBER" in t and "member_cell" not in pos:
-                pos["member_cell"] = (cell.row, cell.column)
-
-            if ("PROVIDER" in t or "MEDICAL AID" in t) and "provider_cell" not in pos:
-                pos["provider_cell"] = (cell.row, cell.column)
-
-            if t.strip() == "DATE" and "date_cell" not in pos:
-                pos["date_cell"] = (cell.row, cell.column)
-
-            headers = ["DESCRIPTION", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
-            if any(h in t for h in headers):
-                pos.setdefault("cols", {})
-                pos.setdefault("table_start_row", cell.row + 1)
-                for h in headers:
-                    if h in t:
-                        pos["cols"][h] = cell.column
-    return pos
-
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
-    wb = openpyxl.load_workbook(template_file)
-    ws = wb.active
-    pos = find_template_positions(ws)
-
-    if "patient_cell" in pos:
-        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
-
-    if "member_cell" in pos:
-        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
-
-    if "provider_cell" in pos:
-        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
-
-    # --- DATE below label, numeric ---
-    today_numeric = datetime.today().strftime("%d/%m/%Y")
-    if "date_cell" in pos:
-        write_below_label(ws, *pos["date_cell"], today_numeric)
-
-    # --- Writing the description to A22 ---
-    scan_types = [sr["SCAN"] for sr in scan_rows if sr["SCAN"].lower() not in ["ff", "consumables"]]
-    
-    # If there are valid scan types, write the first one to A22
-    if scan_types:
-        write_safe(ws, 22, 1, scan_types[0])  # Cell A22 = First scan type
-    
-    # --- Write selected scans to the table (starting at row 23) ---
-    if "table_start_row" in pos and "cols" in pos:
-        rowptr = pos["table_start_row"]
-        total_amount = 0.0  # To calculate total sum
-
-        for sr in scan_rows:
-            # Skip consumables and FF from being displayed in the table
-            if sr["SCAN"].lower() in ["ff", "consumables"]:
-                continue
-            
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
-            write_safe(ws, rowptr, pos["cols"].get("TARRIF"), sr["TARIFF"])
-            write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
-            write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
-            write_safe(ws, rowptr, pos["cols"].get("FEES"), sr["AMOUNT"])
-            total_amount += sr["AMOUNT"]
-            rowptr += 1
-
-        # --- Write total amount to F22 (Cell F22) ---
-        if "cols" in pos:
-            write_safe(ws, 22, pos["cols"].get("FEES"), total_amount)  # Write total to F22
-
-    # --- Save the file and return the buffer ---
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
-# ---------- Streamlit UI ----------
+# ================= STREAMLIT UI =================
 st.title("Medical Quotation Generator")
 
-uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
+charge_file = st.file_uploader("Upload Charge Sheet", ["xlsx"])
+template_file = st.file_uploader("Upload Excel Template", ["xlsx"])
 
 patient = st.text_input("Patient Name")
-member = st.text_input("Medical Aid / Member Number")
-provider = st.text_input("Medical Aid Provider", value="CIMAS")
+member = st.text_input("Member Number")
+provider = st.text_input("Medical Aid Provider", "CIMAS")
 
-if uploaded_charge and st.button("Load & Parse Charge Sheet"):
-    st.session_state.df = load_charge_sheet(uploaded_charge)
-    st.success("Charge sheet parsed successfully.")
+if charge_file and st.button("Parse Charge Sheet"):
+    st.session_state.df = load_charge_sheet(charge_file)
+    st.success("Parsed successfully")
 
 if "df" in st.session_state:
     df = st.session_state.df
-    categories = sorted(df["CATEGORY"].dropna().unique())
 
-    main_sel = st.selectbox("Select Main Category", categories)
-    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
+    cats = sorted(df.CATEGORY.dropna().unique())
+    selected_cats = st.multiselect("Select Categories", cats)
 
-    scans = (
-        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == st.selectbox("Select Subcategory", subcats))]
-        if subcats else df[df["CATEGORY"] == main_sel]
+    filtered = df[df.CATEGORY.isin(selected_cats)] if selected_cats else df
+
+    st.subheader("Select & Edit Scans")
+    edited = st.data_editor(
+        filtered,
+        use_container_width=True,
+        num_rows="fixed"
     )
 
-    scans = scans.reset_index(drop=True)
-    scans["label"] = scans.apply(
-        lambda r: f"{r['SCAN']} | Tariff
+    edited["AMOUNT"] = edited["TARIFF"] * edited["QTY"]
+
+    total = edited["AMOUNT"].sum()
+    st.metric("Total Amount", f"{total:,.2f}")
+
+    st.subheader("Quotation Preview")
+    st.dataframe(edited)
+
+    if template_file and st.button("Generate Quotation"):
+        out = fill_excel_template(
+            template_file, patient, member, provider,
+            edited.to_dict("records")
+        )
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name=f"quotation_{patient or 'patient'}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
