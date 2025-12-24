@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ------------------------------------------------------------
-# LOGIN / CAPTIVE PORTAL
+# LOGIN / CAPTIVE PORTAL (SAFE)
 # ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -17,14 +17,19 @@ if not st.session_state.logged_in:
     st.title("Login Required")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        # Replace these credentials with your own secure method if needed
-        if username == "admin" and password == "Jamela2003":
+    
+    login_attempted = st.button("Login")
+
+    if login_attempted:
+        # Replace with your credentials
+        if username == "admin" and password == "1234":
             st.session_state.logged_in = True
-            st.experimental_rerun()
+            st.success("Login successful! Reload or interact with the app to continue.")
         else:
             st.error("Invalid credentials")
-    st.stop()  # stop execution here until login
+    
+    st.stop()  # stop execution until login succeeds
+
 # ------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------
