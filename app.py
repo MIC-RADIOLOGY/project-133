@@ -63,16 +63,19 @@ def load_charge_sheet(file):
         if not exam:
             continue
 
-        exam_u = exam.upper()
+        exam_u = exam.upper().strip()
 
+        # Main category
         if exam_u in MAIN_CATEGORIES:
             current_category = exam
             current_subcategory = None
             continue
 
+        # Skip totals / garbage
         if exam_u in GARBAGE_KEYS:
             continue
 
+        # Subcategory rows (no tariff & no amount)
         if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
             current_subcategory = exam
             continue
@@ -80,13 +83,16 @@ def load_charge_sheet(file):
         if not current_category:
             continue
 
+        # ✅ Correct main/component scan logic
+        is_main_scan = exam_u not in COMPONENT_KEYS
+
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
-            "SCAN": exam,
-            "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
+            "SCAN": exam,                      # EXACT text preserved
+            "IS_MAIN_SCAN": is_main_scan,
             "TARIFF": safe_float(r["B_TARIFF"], None),
-            "MODIFIER": str(clean_text(r["C_MOD"])),  # EXACT modifier e.g. 25
+            "MODIFIER": str(clean_text(r["C_MOD"])),
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
         })
@@ -103,7 +109,6 @@ def write_safe(ws, r, c, value):
     try:
         cell.value = value
     except Exception:
-        # Handle merged cells
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
                 start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
@@ -181,7 +186,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        # Always write exact DESCRIPTION for main scans
         if sr["IS_MAIN_SCAN"]:
             write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
 
@@ -198,7 +202,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    # ONLY ONE TOTAL — CELL G22
+    # Only one total — CELL G22
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
