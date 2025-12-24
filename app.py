@@ -30,9 +30,6 @@ def clean_text(x):
         return ""
     return str(x).replace("\xa0", " ").strip()
 
-def u(x):
-    return clean_text(x).upper()
-
 def safe_int(x, default=1):
     try:
         return int(float(str(x).replace(",", "").strip()))
@@ -89,7 +86,7 @@ def load_charge_sheet(file):
             "SCAN": exam,
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
             "TARIFF": safe_float(r["B_TARIFF"], None),
-            "MODIFIER": clean_text(r["C_MOD"]),
+            "MODIFIER": str(clean_text(r["C_MOD"])),  # EXACT modifier e.g. 25
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
         })
@@ -116,14 +113,9 @@ def append_after_label(ws, r, c, label, value):
         return
     cell = ws.cell(row=r, column=c)
     existing = str(cell.value) if cell.value else ""
-    if label.upper() in existing.upper():
-        cell.value = f"{existing.strip()} {value}"
-    else:
-        cell.value = value
+    cell.value = f"{existing.strip()} {value}".strip()
 
 def write_below_label(ws, r, c, value):
-    if not value:
-        return
     target = ws.cell(row=r + 1, column=c)
     try:
         target.value = value
@@ -142,7 +134,7 @@ def find_template_positions(ws):
             if not cell.value:
                 continue
 
-            t = u(cell.value)
+            t = str(cell.value).upper()
 
             if "PATIENT" in t:
                 pos.setdefault("patient_cell", (cell.row, cell.column))
@@ -162,7 +154,7 @@ def find_template_positions(ws):
     return pos
 
 # ------------------------------------------------------------
-# TEMPLATE FILL
+# TEMPLATE FILL (LOCKED LOGIC)
 # ------------------------------------------------------------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
@@ -183,6 +175,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
                           datetime.today().strftime("%d/%m/%Y"))
 
     rowptr = pos.get("table_start_row", 22)
+    grand_total = 0.0
 
     for sr in scan_rows:
         if sr["IS_MAIN_SCAN"]:
@@ -197,13 +190,12 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
         fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(fees, 2))
-        write_safe(ws, rowptr, pos["cols"].get("AMOUNT"), round(sr["AMOUNT"], 2))
 
+        grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    # Force totals to start from F22
-    ws["F41"] = "=SUM(F22:F40)"
-    ws["G41"] = "=SUM(G22:G40)"
+    # ✅ ONLY ONE TOTAL — CELL G22
+    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -229,8 +221,10 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
 if "df" in st.session_state:
     df = st.session_state.df
 
-    main_sel = st.selectbox("Select Main Category",
-                            sorted(df["CATEGORY"].dropna().unique()))
+    main_sel = st.selectbox(
+        "Select Main Category",
+        sorted(df["CATEGORY"].dropna().unique())
+    )
 
     subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
     sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
