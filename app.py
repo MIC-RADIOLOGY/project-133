@@ -10,16 +10,13 @@ st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 # ------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------
-# Components / consumables (not written as main scan description)
 COMPONENT_KEYS = {
     "PELVIS", "CONSUMABLES", "FF",
     "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
 }
 
-# Garbage / totals
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
-# Main categories will be detected dynamically
 MAIN_CATEGORIES = set()
 
 # ------------------------------------------------------------
@@ -65,18 +62,15 @@ def load_charge_sheet(file):
 
         exam_u = exam.upper().strip()
 
-        # Detect main category dynamically
         if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
             MAIN_CATEGORIES.add(exam_u)
             current_category = exam
             current_subcategory = None
             continue
 
-        # Skip totals / garbage
         if exam_u in GARBAGE_KEYS:
             continue
 
-        # Subcategory rows (no tariff & no amount)
         if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
             current_subcategory = exam
             continue
@@ -89,7 +83,7 @@ def load_charge_sheet(file):
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
-            "SCAN": exam,           # Exact description
+            "SCAN": exam,
             "IS_MAIN_SCAN": is_main_scan,
             "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": str(clean_text(r["C_MOD"])),
@@ -186,7 +180,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        # Hierarchical: indent components
+        # Indent component scans
         if sr["IS_MAIN_SCAN"]:
             write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
         else:
@@ -205,7 +199,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
-    # Only one total — CELL G22
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
@@ -259,6 +252,16 @@ if "df" in st.session_state:
     selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
     if selected_rows:
+        st.subheader("Edit final description for Excel")
+        for i, row in enumerate(selected_rows):
+            new_desc = st.text_input(
+                f"Description for '{row['SCAN']}'",
+                value=row['SCAN'],
+                key=f"desc_{i}"
+            )
+            selected_rows[i]['SCAN'] = new_desc
+
+        st.subheader("Preview of selected scans")
         st.dataframe(pd.DataFrame(selected_rows)[
             ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
         ])
