@@ -22,7 +22,7 @@ if not st.session_state.logged_in:
 
     if login_attempted:
         # Replace with your credentials
-        if username == "admin" and password == "1234":
+        if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.success("Login successful! Reload or interact with the app to continue.")
         else:
