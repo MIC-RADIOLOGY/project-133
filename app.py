@@ -38,6 +38,8 @@ def safe_float(x, default=0.0):
 
 def write_preserve_style(ws, row, col, value):
     """Write a value to a cell while preserving existing styles."""
+    if not col:
+        return
     cell = ws.cell(row=row, column=col)
     old_font = copy(cell.font)
     old_fill = copy(cell.fill)
@@ -104,7 +106,11 @@ def load_charge_sheet(file):
 # EXCEL HELPERS
 # ------------------------------------------------------------
 def find_template_positions(ws):
-    """Detect columns for DESCRIPTION, TARIFF, MOD, QTY, FEES, AMOUNT."""
+    """
+    Detect header columns (DESCRIPTION, TARIFF, MOD, QTY, FEES, AMOUNT)
+    in the template, ignoring case and extra spaces.
+    Also detects patient, member, provider, and date cells.
+    """
     pos = {}
     headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
 
@@ -112,20 +118,25 @@ def find_template_positions(ws):
         for cell in row:
             if not cell.value:
                 continue
-            t = str(cell.value).upper()
-            if "PATIENT" in t:
+            t = str(cell.value).upper().strip()
+
+            # Detect special cells
+            if "PATIENT" in t and "patient_cell" not in pos:
                 pos["patient_cell"] = (cell.row, cell.column)
-            if "MEMBER" in t:
+            if "MEMBER" in t and "member_cell" not in pos:
                 pos["member_cell"] = (cell.row, cell.column)
-            if "PROVIDER" in t or "MEDICAL AID" in t:
+            if ("PROVIDER" in t or "MEDICAL AID" in t) and "provider_cell" not in pos:
                 pos["provider_cell"] = (cell.row, cell.column)
-            if t.strip() == "DATE":
+            if t == "DATE" and "date_cell" not in pos:
                 pos["date_cell"] = (cell.row, cell.column)
-            if any(h in t for h in headers):
-                pos["cols"] = {}
-                pos["table_start_row"] = cell.row + 1
-                for h in headers:
-                    if h in t:
+
+            # Detect table headers
+            for h in headers:
+                if h in t:
+                    if "cols" not in pos:
+                        pos["cols"] = {}
+                        pos["table_start_row"] = cell.row + 1
+                    if h not in pos["cols"]:
                         pos["cols"][h] = cell.column
     return pos
 
