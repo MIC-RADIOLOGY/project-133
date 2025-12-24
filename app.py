@@ -36,6 +36,19 @@ def safe_float(x, default=0.0):
     except Exception:
         return default
 
+def write_preserve_style(ws, row, col, value):
+    """Write a value to a cell while preserving existing styles."""
+    cell = ws.cell(row=row, column=col)
+    old_font = copy(cell.font)
+    old_fill = copy(cell.fill)
+    old_border = copy(cell.border)
+    old_alignment = copy(cell.alignment)
+    cell.value = value
+    cell.font = old_font
+    cell.fill = old_fill
+    cell.border = old_border
+    cell.alignment = old_alignment
+
 # ------------------------------------------------------------
 # PARSER
 # ------------------------------------------------------------
@@ -90,23 +103,31 @@ def load_charge_sheet(file):
 # ------------------------------------------------------------
 # EXCEL HELPERS
 # ------------------------------------------------------------
-def write_to_data_sheet(wb, scan_rows):
-    if "Data" in wb.sheetnames:
-        ws_data = wb["Data"]
-    else:
-        ws_data = wb.create_sheet("Data")
-        ws_data.sheet_state = 'hidden'
+def find_template_positions(ws):
+    """Detect columns for DESCRIPTION, TARIFF, MOD, QTY, FEES, AMOUNT."""
+    pos = {}
+    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
 
-    headers = ["DESCRIPTION", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
-    for col, h in enumerate(headers, 1):
-        ws_data.cell(row=1, column=col, value=h)
-
-    for r, row in enumerate(scan_rows, start=2):
-        ws_data.cell(row=r, column=1, value=row["SCAN"])
-        ws_data.cell(row=r, column=2, value=row["TARIFF"])
-        ws_data.cell(row=r, column=3, value=row["MODIFIER"])
-        ws_data.cell(row=r, column=4, value=row["QTY"])
-        ws_data.cell(row=r, column=5, value=row["AMOUNT"])
+    for row in ws.iter_rows(min_row=1, max_row=200):
+        for cell in row:
+            if not cell.value:
+                continue
+            t = str(cell.value).upper()
+            if "PATIENT" in t:
+                pos["patient_cell"] = (cell.row, cell.column)
+            if "MEMBER" in t:
+                pos["member_cell"] = (cell.row, cell.column)
+            if "PROVIDER" in t or "MEDICAL AID" in t:
+                pos["provider_cell"] = (cell.row, cell.column)
+            if t.strip() == "DATE":
+                pos["date_cell"] = (cell.row, cell.column)
+            if any(h in t for h in headers):
+                pos["cols"] = {}
+                pos["table_start_row"] = cell.row + 1
+                for h in headers:
+                    if h in t:
+                        pos["cols"][h] = cell.column
+    return pos
 
 # ------------------------------------------------------------
 # TEMPLATE FILL
@@ -114,30 +135,38 @@ def write_to_data_sheet(wb, scan_rows):
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
+    pos = find_template_positions(ws)
 
-    # Fill patient info
-    for row in ws.iter_rows(min_row=1, max_row=50):
-        for cell in row:
-            if not cell.value:
-                continue
-            t = str(cell.value).upper()
-            if "PATIENT" in t:
-                cell.value = f"{cell.value} {patient}"
-            elif "MEMBER" in t:
-                cell.value = f"{cell.value} {member}"
-            elif "PROVIDER" in t or "MEDICAL AID" in t:
-                cell.value = f"{cell.value} {provider}"
-            elif t.strip() == "DATE":
-                ws.cell(row=cell.row + 1, column=cell.column, value=datetime.today().strftime("%d/%m/%Y"))
+    # Fill header info
+    if "patient_cell" in pos:
+        r, c = pos["patient_cell"]
+        ws.cell(row=r, column=c).value = f"{ws.cell(row=r,column=c).value} {patient}"
+    if "member_cell" in pos:
+        r, c = pos["member_cell"]
+        ws.cell(row=r, column=c).value = f"{ws.cell(row=r,column=c).value} {member}"
+    if "provider_cell" in pos:
+        r, c = pos["provider_cell"]
+        ws.cell(row=r, column=c).value = f"{ws.cell(row=r,column=c).value} {provider}"
+    if "date_cell" in pos:
+        r, c = pos["date_cell"]
+        ws.cell(row=r+1, column=c).value = datetime.today().strftime("%d/%m/%Y")
 
-    # Write data to hidden sheet
-    write_to_data_sheet(wb, scan_rows)
+    # Fill scan rows
+    rowptr = pos.get("table_start_row", 22)
+    grand_total = 0.0
+    for sr in scan_rows:
+        if sr["IS_MAIN_SCAN"]:
+            write_preserve_style(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
+        write_preserve_style(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), sr["TARIFF"])
+        write_preserve_style(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
+        write_preserve_style(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
+        fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
+        write_preserve_style(ws, rowptr, pos["cols"].get("FEES"), round(fees,2))
+        grand_total += sr["AMOUNT"]
+        rowptr += 1
 
-    # At this point, the template should have formulas pointing to Data sheet:
-    # Example:
-    # = 'Data'!A2 for DESCRIPTION
-    # =SUM('Data'!E2:E50) for TOTAL
-    # So we don’t overwrite template cells directly
+    # Write grand total (preserve style)
+    write_preserve_style(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -162,19 +191,15 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
 
 if "df" in st.session_state:
     df = st.session_state.df
-
     main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].dropna().unique()))
     subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
     sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
-
     scans = (df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
              if sub_sel else df[df["CATEGORY"] == main_sel]).reset_index(drop=True)
 
     scans["label"] = scans.apply(lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}", axis=1)
-
     selected = st.multiselect("Select scans to include", options=list(range(len(scans))),
-                              format_func=lambda i: scans.at[i, "label"])
-
+                              format_func=lambda i: scans.at[i,"label"])
     selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
     if selected_rows:
@@ -184,10 +209,10 @@ if "df" in st.session_state:
             selected_rows[i]['SCAN'] = new_desc
 
         st.subheader("Preview of selected scans")
-        st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
+        st.dataframe(pd.DataFrame(selected_rows)[["SCAN","TARIFF","MODIFIER","QTY","AMOUNT"]])
 
         if uploaded_template and st.button("Generate & Download Quotation"):
-            safe_name = "".join(c for c in (patient or "patient") if c.isalnum() or c in (" ", "_")).strip()
+            safe_name = "".join(c for c in (patient or "patient") if c.isalnum() or c in (" ","_")).strip()
             out = fill_excel_template(uploaded_template, patient, member, provider, selected_rows)
             st.download_button("Download Quotation", data=out,
                                file_name=f"quotation_{safe_name}.xlsx",
