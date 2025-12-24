@@ -4,17 +4,14 @@ import pandas as pd
 import openpyxl
 import io
 from datetime import datetime
+from copy import copy
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------
-COMPONENT_KEYS = {
-    "PELVIS", "CONSUMABLES", "FF",
-    "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
-}
-
+COMPONENT_KEYS = {"PELVIS", "CONSUMABLES", "FF", "IV", "IV CONTRAST", "IV CONTRAST 100MLS"}
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 MAIN_CATEGORIES = set()
@@ -44,10 +41,8 @@ def safe_float(x, default=0.0):
 # ------------------------------------------------------------
 def load_charge_sheet(file):
     df_raw = pd.read_excel(file, header=None, dtype=object)
-
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
-
     df_raw = df_raw.iloc[:, :5]
     df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
 
@@ -61,7 +56,6 @@ def load_charge_sheet(file):
             continue
 
         exam_u = exam.upper().strip()
-
         if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
             MAIN_CATEGORIES.add(exam_u)
             current_category = exam
@@ -96,64 +90,23 @@ def load_charge_sheet(file):
 # ------------------------------------------------------------
 # EXCEL HELPERS
 # ------------------------------------------------------------
-def write_safe(ws, r, c, value):
-    if not c:
-        return
-    cell = ws.cell(row=r, column=c)
-    try:
-        cell.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if cell.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
-                return
+def write_to_data_sheet(wb, scan_rows):
+    if "Data" in wb.sheetnames:
+        ws_data = wb["Data"]
+    else:
+        ws_data = wb.create_sheet("Data")
+        ws_data.sheet_state = 'hidden'
 
-def append_after_label(ws, r, c, label, value):
-    if not value:
-        return
-    cell = ws.cell(row=r, column=c)
-    existing = str(cell.value) if cell.value else ""
-    cell.value = f"{existing.strip()} {value}".strip()
+    headers = ["DESCRIPTION", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
+    for col, h in enumerate(headers, 1):
+        ws_data.cell(row=1, column=col, value=h)
 
-def write_below_label(ws, r, c, value):
-    target = ws.cell(row=r + 1, column=c)
-    try:
-        target.value = value
-    except Exception:
-        for mr in ws.merged_cells.ranges:
-            if target.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
-                return
-
-def find_template_positions(ws):
-    pos = {}
-    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
-
-    for row in ws.iter_rows(min_row=1, max_row=200):
-        for cell in row:
-            if not cell.value:
-                continue
-
-            t = str(cell.value).upper()
-
-            if "PATIENT" in t:
-                pos.setdefault("patient_cell", (cell.row, cell.column))
-            if "MEMBER" in t:
-                pos.setdefault("member_cell", (cell.row, cell.column))
-            if "PROVIDER" in t or "MEDICAL AID" in t:
-                pos.setdefault("provider_cell", (cell.row, cell.column))
-            if t.strip() == "DATE":
-                pos.setdefault("date_cell", (cell.row, cell.column))
-
-            if any(h in t for h in headers):
-                pos.setdefault("cols", {})
-                pos.setdefault("table_start_row", cell.row + 1)
-                for h in headers:
-                    if h in t:
-                        pos["cols"][h] = cell.column
-    return pos
+    for r, row in enumerate(scan_rows, start=2):
+        ws_data.cell(row=r, column=1, value=row["SCAN"])
+        ws_data.cell(row=r, column=2, value=row["TARIFF"])
+        ws_data.cell(row=r, column=3, value=row["MODIFIER"])
+        ws_data.cell(row=r, column=4, value=row["QTY"])
+        ws_data.cell(row=r, column=5, value=row["AMOUNT"])
 
 # ------------------------------------------------------------
 # TEMPLATE FILL
@@ -161,45 +114,30 @@ def find_template_positions(ws):
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
-    pos = find_template_positions(ws)
 
-    if "patient_cell" in pos:
-        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
+    # Fill patient info
+    for row in ws.iter_rows(min_row=1, max_row=50):
+        for cell in row:
+            if not cell.value:
+                continue
+            t = str(cell.value).upper()
+            if "PATIENT" in t:
+                cell.value = f"{cell.value} {patient}"
+            elif "MEMBER" in t:
+                cell.value = f"{cell.value} {member}"
+            elif "PROVIDER" in t or "MEDICAL AID" in t:
+                cell.value = f"{cell.value} {provider}"
+            elif t.strip() == "DATE":
+                ws.cell(row=cell.row + 1, column=cell.column, value=datetime.today().strftime("%d/%m/%Y"))
 
-    if "member_cell" in pos:
-        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
+    # Write data to hidden sheet
+    write_to_data_sheet(wb, scan_rows)
 
-    if "provider_cell" in pos:
-        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
-
-    if "date_cell" in pos:
-        write_below_label(ws, *pos["date_cell"],
-                          datetime.today().strftime("%d/%m/%Y"))
-
-    rowptr = pos.get("table_start_row", 22)
-    grand_total = 0.0
-
-    for sr in scan_rows:
-        # Indent component scans
-        if sr["IS_MAIN_SCAN"]:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
-        else:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), "   " + sr["SCAN"])
-
-        write_safe(ws, rowptr,
-                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-                   sr["TARIFF"])
-
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
-
-        fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(fees, 2))
-
-        grand_total += sr["AMOUNT"]
-        rowptr += 1
-
-    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
+    # At this point, the template should have formulas pointing to Data sheet:
+    # Example:
+    # = 'Data'!A2 for DESCRIPTION
+    # =SUM('Data'!E2:E50) for TOTAL
+    # So we don’t overwrite template cells directly
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -225,60 +163,32 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
 if "df" in st.session_state:
     df = st.session_state.df
 
-    main_sel = st.selectbox(
-        "Select Main Category",
-        sorted(df["CATEGORY"].dropna().unique())
-    )
-
+    main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].dropna().unique()))
     subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
     sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-    scans = (
-        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-        if sub_sel else df[df["CATEGORY"] == main_sel]
-    ).reset_index(drop=True)
+    scans = (df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+             if sub_sel else df[df["CATEGORY"] == main_sel]).reset_index(drop=True)
 
-    scans["label"] = scans.apply(
-        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
-        axis=1
-    )
+    scans["label"] = scans.apply(lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}", axis=1)
 
-    selected = st.multiselect(
-        "Select scans to include",
-        options=list(range(len(scans))),
-        format_func=lambda i: scans.at[i, "label"]
-    )
+    selected = st.multiselect("Select scans to include", options=list(range(len(scans))),
+                              format_func=lambda i: scans.at[i, "label"])
 
     selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
     if selected_rows:
         st.subheader("Edit final description for Excel")
         for i, row in enumerate(selected_rows):
-            new_desc = st.text_input(
-                f"Description for '{row['SCAN']}'",
-                value=row['SCAN'],
-                key=f"desc_{i}"
-            )
+            new_desc = st.text_input(f"Description for '{row['SCAN']}'", value=row['SCAN'], key=f"desc_{i}")
             selected_rows[i]['SCAN'] = new_desc
 
         st.subheader("Preview of selected scans")
-        st.dataframe(pd.DataFrame(selected_rows)[
-            ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
-        ])
+        st.dataframe(pd.DataFrame(selected_rows)[["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]])
 
         if uploaded_template and st.button("Generate & Download Quotation"):
-            safe_name = "".join(
-                c for c in (patient or "patient")
-                if c.isalnum() or c in (" ", "_")
-            ).strip()
-
-            out = fill_excel_template(
-                uploaded_template, patient, member, provider, selected_rows
-            )
-
-            st.download_button(
-                "Download Quotation",
-                data=out,
-                file_name=f"quotation_{safe_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            safe_name = "".join(c for c in (patient or "patient") if c.isalnum() or c in (" ", "_")).strip()
+            out = fill_excel_template(uploaded_template, patient, member, provider, selected_rows)
+            st.download_button("Download Quotation", data=out,
+                               file_name=f"quotation_{safe_name}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
