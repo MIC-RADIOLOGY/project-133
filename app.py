@@ -42,7 +42,7 @@ GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 MAIN_CATEGORIES = set()
 
-# Cloud files (Dropbox direct download links)
+# Correct Dropbox direct download links (dl=1)
 CLOUD_FILES = {
     "charge_sheet": "https://www.dropbox.com/s/re5o3291h67jlnkfjq0hg/CHARGE-SHEET.xlsx?dl=1",
     "quotation_template": "https://www.dropbox.com/s/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?dl=1"
