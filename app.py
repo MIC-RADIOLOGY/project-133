@@ -3,12 +3,13 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
+import requests
 from datetime import datetime
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ------------------------------------------------------------
-# LOGIN / CAPTIVE PORTAL (SAFE)
+# LOGIN / CAPTIVE PORTAL
 # ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -21,14 +22,13 @@ if not st.session_state.logged_in:
     login_attempted = st.button("Login")
 
     if login_attempted:
-        # Replace with your credentials
         if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.success("Login successful! Reload or interact with the app to continue.")
         else:
             st.error("Invalid credentials")
     
-    st.stop()  # stop execution until login succeeds
+    st.stop()
 
 # ------------------------------------------------------------
 # CONFIG
@@ -41,6 +41,12 @@ COMPONENT_KEYS = {
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 
 MAIN_CATEGORIES = set()
+
+# Cloud files (Dropbox direct download links)
+CLOUD_FILES = {
+    "charge_sheet": "https://www.dropbox.com/s/re5o3291h67jlnkfjq0hg/CHARGE-SHEET.xlsx?dl=1",
+    "quotation_template": "https://www.dropbox.com/s/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?dl=1"
+}
 
 # ------------------------------------------------------------
 # HELPERS
@@ -62,11 +68,16 @@ def safe_float(x, default=0.0):
     except Exception:
         return default
 
+def load_file_from_cloud(url):
+    r = requests.get(url)
+    r.raise_for_status()
+    return io.BytesIO(r.content)
+
 # ------------------------------------------------------------
 # PARSER
 # ------------------------------------------------------------
-def load_charge_sheet(file):
-    df_raw = pd.read_excel(file, header=None, dtype=object)
+def load_charge_sheet(file_buf):
+    df_raw = pd.read_excel(file_buf, header=None, dtype=object)
 
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
@@ -181,8 +192,8 @@ def find_template_positions(ws):
 # ------------------------------------------------------------
 # TEMPLATE FILL
 # ------------------------------------------------------------
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
-    wb = openpyxl.load_workbook(template_file)
+def fill_excel_template(template_file_buf, patient, member, provider, scan_rows):
+    wb = openpyxl.load_workbook(template_file_buf)
     ws = wb.active
     pos = find_template_positions(ws)
 
@@ -203,7 +214,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        # Indent component scans
         if sr["IS_MAIN_SCAN"]:
             write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
         else:
@@ -212,7 +222,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         write_safe(ws, rowptr,
                    pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
                    sr["TARIFF"])
-
         write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
@@ -234,74 +243,74 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 # ------------------------------------------------------------
 st.title("Medical Quotation Generator")
 
-uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
+# Load charge sheet automatically from cloud
+if "df" not in st.session_state:
+    charge_buf = load_file_from_cloud(CLOUD_FILES["charge_sheet"])
+    st.session_state.df = load_charge_sheet(charge_buf)
+    st.success("Charge sheet loaded from cloud successfully.")
+
+df = st.session_state.df
 
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-if uploaded_charge and st.button("Load & Parse Charge Sheet"):
-    st.session_state.df = load_charge_sheet(uploaded_charge)
-    st.success("Charge sheet parsed successfully.")
+# Select category and subcategory
+main_sel = st.selectbox(
+    "Select Main Category",
+    sorted(df["CATEGORY"].dropna().unique())
+)
 
-if "df" in st.session_state:
-    df = st.session_state.df
+subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
+sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-    main_sel = st.selectbox(
-        "Select Main Category",
-        sorted(df["CATEGORY"].dropna().unique())
-    )
+scans = (
+    df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+    if sub_sel else df[df["CATEGORY"] == main_sel]
+).reset_index(drop=True)
 
-    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
-    sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
+scans["label"] = scans.apply(
+    lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
+    axis=1
+)
 
-    scans = (
-        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-        if sub_sel else df[df["CATEGORY"] == main_sel]
-    ).reset_index(drop=True)
+selected = st.multiselect(
+    "Select scans to include",
+    options=list(range(len(scans))),
+    format_func=lambda i: scans.at[i, "label"]
+)
 
-    scans["label"] = scans.apply(
-        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
-        axis=1
-    )
+selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
-    selected = st.multiselect(
-        "Select scans to include",
-        options=list(range(len(scans))),
-        format_func=lambda i: scans.at[i, "label"]
-    )
+# Edit descriptions
+if selected_rows:
+    st.subheader("Edit final description for Excel")
+    for i, row in enumerate(selected_rows):
+        new_desc = st.text_input(
+            f"Description for '{row['SCAN']}'",
+            value=row['SCAN'],
+            key=f"desc_{i}"
+        )
+        selected_rows[i]['SCAN'] = new_desc
 
-    selected_rows = [scans.iloc[i].to_dict() for i in selected]
+    st.subheader("Preview of selected scans")
+    st.dataframe(pd.DataFrame(selected_rows)[
+        ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
+    ])
 
-    if selected_rows:
-        st.subheader("Edit final description for Excel")
-        for i, row in enumerate(selected_rows):
-            new_desc = st.text_input(
-                f"Description for '{row['SCAN']}'",
-                value=row['SCAN'],
-                key=f"desc_{i}"
-            )
-            selected_rows[i]['SCAN'] = new_desc
+    # Generate quotation using cloud template
+    if st.button("Generate & Download Quotation"):
+        template_buf = load_file_from_cloud(CLOUD_FILES["quotation_template"])
+        out = fill_excel_template(template_buf, patient, member, provider, selected_rows)
 
-        st.subheader("Preview of selected scans")
-        st.dataframe(pd.DataFrame(selected_rows)[
-            ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
-        ])
+        safe_name = "".join(
+            c for c in (patient or "patient")
+            if c.isalnum() or c in (" ", "_")
+        ).strip()
 
-        if uploaded_template and st.button("Generate & Download Quotation"):
-            safe_name = "".join(
-                c for c in (patient or "patient")
-                if c.isalnum() or c in (" ", "_")
-            ).strip()
-
-            out = fill_excel_template(
-                uploaded_template, patient, member, provider, selected_rows
-            )
-
-            st.download_button(
-                "Download Quotation",
-                data=out,
-                file_name=f"quotation_{safe_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name=f"quotation_{safe_name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
