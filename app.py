@@ -229,7 +229,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ------------------------------------------------------------
-# LOAD GOOGLE SHEETS AUTOMATICALLY
+# LOAD EXTERNAL FILES AUTOMATICALLY
 # ------------------------------------------------------------
 @st.cache_data
 def fetch_charge_sheet():
@@ -238,11 +238,11 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ/pub?output=xlsx"
+    # Dropbox direct download link
+    url = "https://www.dropbox.com/scl/fi/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=xd6h5z27&dl=1"
     response = requests.get(url)
     response.raise_for_status()
-    buf = io.BytesIO(response.content)
-    return buf
+    return io.BytesIO(response.content)
 
 # ------------------------------------------------------------
 # STREAMLIT UI
@@ -302,7 +302,7 @@ if selected_rows:
     ])
 
     if st.button("Generate & Download Quotation"):
-        quote_template_buf = fetch_quote_template()  # Automatically fetch template
+        quote_template_buf = fetch_quote_template()
         out = fill_excel_template(
             quote_template_buf, patient, member, provider, selected_rows
         )
