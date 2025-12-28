@@ -237,27 +237,26 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
 if "df" in st.session_state:
     df = st.session_state.df
 
-    main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].unique()))
-    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
-    sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
+    # CATEGORY -> SUBCATEGORY -> SCAN checkboxes
+    selected_rows = []
+    st.subheader("Select scans to include in quotation")
+    for main_cat in sorted(df["CATEGORY"].unique()):
+        with st.expander(main_cat, expanded=False):
+            subcats = df[df["CATEGORY"] == main_cat]["SUBCATEGORY"].dropna().unique()
+            for subcat in subcats:
+                with st.expander(f"Subcategory: {subcat}", expanded=False):
+                    scans = df[(df["CATEGORY"] == main_cat) & (df["SUBCATEGORY"] == subcat)].reset_index(drop=True)
+                    for idx, r in scans.iterrows():
+                        label = f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}"
+                        if st.checkbox(label, key=f"{main_cat}_{subcat}_{idx}"):
+                            selected_rows.append(r.to_dict())
 
-    scans = (
-        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-        if sub_sel else df[df["CATEGORY"] == main_sel]
-    ).reset_index(drop=True)
-
-    scans["label"] = scans.apply(
-        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
-        axis=1
-    )
-
-    selected = st.multiselect(
-        "Select scans to include",
-        options=list(range(len(scans))),
-        format_func=lambda i: scans.at[i, "label"]
-    )
-
-    selected_rows = [scans.iloc[i].to_dict() for i in selected]
+            # Also allow scans without subcategory
+            scans_no_sub = df[(df["CATEGORY"] == main_cat) & (df["SUBCATEGORY"].isna())].reset_index(drop=True)
+            for idx, r in scans_no_sub.iterrows():
+                label = f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}"
+                if st.checkbox(label, key=f"{main_cat}_none_{idx}"):
+                    selected_rows.append(r.to_dict())
 
     if selected_rows:
         st.subheader("Preview of selected scans")
