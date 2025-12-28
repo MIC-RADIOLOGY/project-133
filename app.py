@@ -21,14 +21,13 @@ if not st.session_state.logged_in:
     login_attempted = st.button("Login")
 
     if login_attempted:
-        # Replace with your credentials
         if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.success("Login successful! Reload or interact with the app to continue.")
         else:
             st.error("Invalid credentials")
     
-    st.stop()  # stop execution until login succeeds
+    st.stop()
 
 # ------------------------------------------------------------
 # CONFIG
@@ -117,6 +116,118 @@ def load_charge_sheet(file):
     return pd.DataFrame(structured)
 
 # ------------------------------------------------------------
+# EXCEL HELPERS
+# ------------------------------------------------------------
+def write_safe(ws, r, c, value):
+    if not c:
+        return
+    cell = ws.cell(row=r, column=c)
+    try:
+        cell.value = value
+    except Exception:
+        for mr in ws.merged_cells.ranges:
+            if cell.coordinate in mr:
+                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
+                start_cell.value = value
+                return
+
+def append_after_label(ws, r, c, label, value):
+    if not value:
+        return
+    cell = ws.cell(row=r, column=c)
+    existing = str(cell.value) if cell.value else ""
+    cell.value = f"{existing.strip()} {value}".strip()
+
+def write_below_label(ws, r, c, value):
+    target = ws.cell(row=r + 1, column=c)
+    try:
+        target.value = value
+    except Exception:
+        for mr in ws.merged_cells.ranges:
+            if target.coordinate in mr:
+                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
+                start_cell.value = value
+                return
+
+def find_template_positions(ws):
+    pos = {}
+    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
+
+    for row in ws.iter_rows(min_row=1, max_row=200):
+        for cell in row:
+            if not cell.value:
+                continue
+
+            t = str(cell.value).upper()
+
+            if "PATIENT" in t:
+                pos.setdefault("patient_cell", (cell.row, cell.column))
+            if "MEMBER" in t:
+                pos.setdefault("member_cell", (cell.row, cell.column))
+            if "PROVIDER" in t or "MEDICAL AID" in t:
+                pos.setdefault("provider_cell", (cell.row, cell.column))
+            if t.strip() == "DATE":
+                pos.setdefault("date_cell", (cell.row, cell.column))
+
+            if any(h in t for h in headers):
+                pos.setdefault("cols", {})
+                pos.setdefault("table_start_row", cell.row + 1)
+                for h in headers:
+                    if h in t:
+                        pos["cols"][h] = cell.column
+    return pos
+
+def fill_excel_template(template_file, patient, member, provider, scan_rows):
+    wb = openpyxl.load_workbook(template_file)
+    ws = wb.active
+    pos = find_template_positions(ws)
+
+    if "patient_cell" in pos:
+        append_after_label(ws, *pos["patient_cell"], "PATIENT", patient)
+
+    if "member_cell" in pos:
+        append_after_label(ws, *pos["member_cell"], "MEMBER", member)
+
+    if "provider_cell" in pos:
+        append_after_label(ws, *pos["provider_cell"], "PROVIDER", provider)
+
+    if "date_cell" in pos:
+        write_below_label(ws, *pos["date_cell"], datetime.today().strftime("%d/%m/%Y"))
+
+    rowptr = pos.get("table_start_row", 22)
+    grand_total = 0.0
+
+    for sr in scan_rows:
+        if sr["IS_MAIN_SCAN"]:
+            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
+        else:
+            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), "   " + sr["SCAN"])
+
+        write_safe(ws, rowptr,
+                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
+                   sr["TARIFF"])
+
+        write_safe(ws, rowptr, 3, sr["MODIFIER"])  # column C fixed
+
+        if pos["cols"].get("MODIFIER"):
+            write_safe(ws, rowptr, pos["cols"]["MODIFIER"], sr["MODIFIER"])
+
+        write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
+
+        fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
+        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(fees, 2))
+
+        grand_total += sr["AMOUNT"]
+        rowptr += 1
+
+    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+# ------------------------------------------------------------
 # LOAD GOOGLE SHEETS AUTOMATICALLY
 # ------------------------------------------------------------
 @st.cache_data
@@ -125,10 +236,12 @@ def fetch_charge_sheet():
     return load_charge_sheet(url)
 
 @st.cache_data
-def fetch_quote_sheet():
+def fetch_quote_template():
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ/pub?output=xlsx"
-    df = pd.read_excel(url)
-    return df
+    buf = io.BytesIO()
+    buf.write(pd.read_excel(url).to_excel(index=False, engine='openpyxl'))
+    buf.seek(0)
+    return buf
 
 # ------------------------------------------------------------
 # STREAMLIT UI
@@ -139,81 +252,68 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Load charge sheet automatically
-if st.button("Load Charge Sheet from Google Sheets"):
+# Automatically load charge sheet
+if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
-    st.success("Charge sheet loaded successfully from Google Sheets!")
+    st.success("Charge sheet loaded automatically!")
 
-# If charge sheet is loaded
-if "df" in st.session_state:
-    df = st.session_state.df
+df = st.session_state.df
 
-    main_sel = st.selectbox(
-        "Select Main Category",
-        sorted(df["CATEGORY"].dropna().unique())
-    )
+main_sel = st.selectbox(
+    "Select Main Category",
+    sorted(df["CATEGORY"].dropna().unique())
+)
 
-    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
-    sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
+subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
+sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-    scans = (
-        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-        if sub_sel else df[df["CATEGORY"] == main_sel]
-    ).reset_index(drop=True)
+scans = (
+    df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+    if sub_sel else df[df["CATEGORY"] == main_sel]
+).reset_index(drop=True)
 
-    scans["label"] = scans.apply(
-        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
-        axis=1
-    )
+scans["label"] = scans.apply(
+    lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
+    axis=1
+)
 
-    selected = st.multiselect(
-        "Select scans to include",
-        options=list(range(len(scans))),
-        format_func=lambda i: scans.at[i, "label"]
-    )
+selected = st.multiselect(
+    "Select scans to include",
+    options=list(range(len(scans))),
+    format_func=lambda i: scans.at[i, "label"]
+)
 
-    selected_rows = [scans.iloc[i].to_dict() for i in selected]
+selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
-    if selected_rows:
-        st.subheader("Edit final description for Excel")
-        for i, row in enumerate(selected_rows):
-            new_desc = st.text_input(
-                f"Description for '{row['SCAN']}'",
-                value=row['SCAN'],
-                key=f"desc_{i}"
-            )
-            selected_rows[i]['SCAN'] = new_desc
+if selected_rows:
+    st.subheader("Edit final description for Excel")
+    for i, row in enumerate(selected_rows):
+        new_desc = st.text_input(
+            f"Description for '{row['SCAN']}'",
+            value=row['SCAN'],
+            key=f"desc_{i}"
+        )
+        selected_rows[i]['SCAN'] = new_desc
 
-        st.subheader("Preview of selected scans")
-        st.dataframe(pd.DataFrame(selected_rows)[
-            ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
-        ])
+    st.subheader("Preview of selected scans")
+    st.dataframe(pd.DataFrame(selected_rows)[
+        ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
+    ])
 
-        # Load quote template from Google Sheets automatically
-        if st.button("Generate & Download Quotation"):
-            quote_df = fetch_quote_sheet()  # Fetch the quote sheet if needed
+    if st.button("Generate & Download Quotation"):
+        quote_template_buf = fetch_quote_template()  # Automatically fetch template
+        out = fill_excel_template(
+            quote_template_buf, patient, member, provider, selected_rows
+        )
 
-            # Here you can integrate quote_df as needed, for example, to enrich scan info
-            # Currently it uses the same selected_rows for template filling
+        safe_name = "".join(
+            c for c in (patient or "patient")
+            if c.isalnum() or c in (" ", "_")
+        ).strip()
 
-            safe_name = "".join(
-                c for c in (patient or "patient")
-                if c.isalnum() or c in (" ", "_")
-            ).strip()
-
-            # Use last uploaded template OR your quote_df as template if needed
-            st.warning("Using uploaded template is recommended for correct formatting!")
-            uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
-
-            if uploaded_template:
-                from app_helpers import fill_excel_template  # reuse existing function
-                out = fill_excel_template(
-                    uploaded_template, patient, member, provider, selected_rows
-                )
-
-                st.download_button(
-                    "Download Quotation",
-                    data=out,
-                    file_name=f"quotation_{safe_name}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name=f"quotation_{safe_name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
