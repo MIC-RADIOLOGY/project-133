@@ -239,7 +239,8 @@ def fetch_charge_sheet():
 def fetch_quote_template():
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ/pub?output=xlsx"
     buf = io.BytesIO()
-    buf.write(pd.read_excel(url).to_excel(index=False, engine='openpyxl'))
+    with openpyxl.load_workbook(io.BytesIO(pd.read_excel(url, engine='openpyxl').to_excel(index=False, engine='openpyxl'))) as wb:
+        wb.save(buf)
     buf.seek(0)
     return buf
 
