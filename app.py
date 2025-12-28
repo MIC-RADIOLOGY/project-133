@@ -141,7 +141,7 @@ def find_template_positions(ws):
             if "AMOUNT" in t:
                 pos["COLS"]["AMOUNT"] = cell.column
 
-            # 🔒 CRITICAL FIX: FIRST MOD ONLY
+            # 🔒 FIRST MOD ONLY
             if "MOD" in t and pos["MOD_COL"] is None:
                 pos["MOD_COL"] = cell.column
 
@@ -160,7 +160,7 @@ def find_template_positions(ws):
     return pos
 
 # ------------------------------------------------------------
-# SAFE WRITE (MERGED-CELL SAFE)
+# SAFE WRITE
 # ------------------------------------------------------------
 def write_safe(ws, r, c, value):
     if not c:
@@ -234,29 +234,29 @@ if uploaded_charge and st.button("Load & Parse Charge Sheet"):
     st.session_state.df = load_charge_sheet(uploaded_charge)
     st.success("Charge sheet parsed successfully")
 
+# ------------------------------------------------------------
+# EDITABLE CATEGORIES
+# ------------------------------------------------------------
+editable_categories = ["ABDOMEN", "PELVIS", "CONSUMABLES", "IV CONTRAST"]
+
 if "df" in st.session_state:
     df = st.session_state.df
+    st.subheader("Edit Descriptions for selected categories")
 
-    # CATEGORY -> SUBCATEGORY -> SCAN checkboxes
     selected_rows = []
-    st.subheader("Select scans to include in quotation")
-    for main_cat in sorted(df["CATEGORY"].unique()):
-        with st.expander(main_cat, expanded=False):
-            subcats = df[df["CATEGORY"] == main_cat]["SUBCATEGORY"].dropna().unique()
-            for subcat in subcats:
-                with st.expander(f"Subcategory: {subcat}", expanded=False):
-                    scans = df[(df["CATEGORY"] == main_cat) & (df["SUBCATEGORY"] == subcat)].reset_index(drop=True)
-                    for idx, r in scans.iterrows():
-                        label = f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}"
-                        if st.checkbox(label, key=f"{main_cat}_{subcat}_{idx}"):
-                            selected_rows.append(r.to_dict())
-
-            # Also allow scans without subcategory
-            scans_no_sub = df[(df["CATEGORY"] == main_cat) & (df["SUBCATEGORY"].isna())].reset_index(drop=True)
-            for idx, r in scans_no_sub.iterrows():
-                label = f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}"
-                if st.checkbox(label, key=f"{main_cat}_none_{idx}"):
-                    selected_rows.append(r.to_dict())
+    for cat in editable_categories:
+        cat_df = df[df["CATEGORY"].str.upper() == cat].reset_index(drop=True)
+        if not cat_df.empty:
+            with st.expander(f"Edit {cat} scans", expanded=True):
+                for idx, row in cat_df.iterrows():
+                    new_desc = st.text_input(
+                        f"{row['SCAN']} | Tariff {row['TARIFF']} | Amount {row['AMOUNT']}",
+                        value=row["SCAN"],
+                        key=f"{cat}_{idx}"
+                    )
+                    row_dict = row.to_dict()
+                    row_dict["SCAN"] = new_desc
+                    selected_rows.append(row_dict)
 
     if selected_rows:
         st.subheader("Preview of selected scans")
