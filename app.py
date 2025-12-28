@@ -213,11 +213,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
                    pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
                    sr["TARIFF"])
 
-        # Write MOD in both MOD and MODIFIER columns
-        mod_cols = [pos["cols"].get("MOD"), pos["cols"].get("MODIFIER")]
-        for mc in mod_cols:
-            write_safe(ws, rowptr, mc, sr["MODIFIER"])
-
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
         fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
