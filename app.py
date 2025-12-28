@@ -97,10 +97,6 @@ def load_charge_sheet(file):
         if not current_category:
             continue
 
-        qty = safe_int(r["D_QTY"], 1)
-        amount = safe_float(r["E_AMOUNT"], 0.0)
-        fees = amount / qty if qty else amount
-
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -108,9 +104,8 @@ def load_charge_sheet(file):
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
             "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": clean_text(r["C_MOD"]),
-            "QTY": qty,
-            "FEES": round(fees, 2),
-            "AMOUNT": round(amount, 2)
+            "QTY": safe_int(r["D_QTY"], 1),
+            "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
         })
 
     return pd.DataFrame(structured)
@@ -151,7 +146,7 @@ def find_template_positions(ws):
 # ------------------------------------------------------------
 # TEMPLATE FILL
 # ------------------------------------------------------------
-def fill_excel_template(template_file, scan_rows):
+def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -173,11 +168,11 @@ def fill_excel_template(template_file, scan_rows):
         for c in pos["cols"].get("MOD", []):
             write_safe(ws, rowptr, c, sr["MODIFIER"])
 
+        # --- FIXED: write QTY and FEES separately ---
         for c in pos["cols"].get("QTY", []):
             write_safe(ws, rowptr, c, sr["QTY"])
-
         for c in pos["cols"].get("FEES", []):
-            write_safe(ws, rowptr, c, sr["FEES"])
+            write_safe(ws, rowptr, c, sr["AMOUNT"])  # keep your original fee value
 
         for c in pos["cols"].get("AMOUNT", []):
             write_safe(ws, rowptr, c, sr["AMOUNT"])
@@ -221,20 +216,29 @@ if "df" in st.session_state:
 
     if selected_idx:
         editor_df = scans.loc[selected_idx, [
-            "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT", "IS_MAIN_SCAN"
+            "SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT", "IS_MAIN_SCAN"
         ]].reset_index(drop=True)
 
         st.subheader("Edit Descriptions (Dedicated Editor)")
         edited_df = st.data_editor(
             editor_df,
-            disabled=["TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT", "IS_MAIN_SCAN"],
+            disabled=["TARIFF", "MODIFIER", "QTY", "AMOUNT", "IS_MAIN_SCAN"],
             use_container_width=True
         )
 
         if st.button("Apply Edits"):
             st.session_state.final_rows = edited_df.to_dict("records")
 
-    if "final_rows" in st.session_state and uploaded_template:
-        if st.button("Generate Excel"):
-            out = fill_excel_template(uploaded_template, st.session_state.final_rows)
-            st.download_button("Download Quotation", out, "quotation.xlsx")
+    if "final_rows" in st.session_state:
+        st.subheader("Preview (Read-Only)")
+        st.dataframe(pd.DataFrame(st.session_state.final_rows))
+
+        if uploaded_template and st.button("Generate Excel"):
+            out = fill_excel_template(
+                uploaded_template, "", "", "", st.session_state.final_rows
+            )
+            st.download_button(
+                "Download Quotation",
+                out,
+                "quotation.xlsx"
+            )
