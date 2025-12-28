@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import io
+import requests
 from datetime import datetime
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
@@ -65,7 +66,7 @@ def safe_float(x, default=0.0):
 # PARSER
 # ------------------------------------------------------------
 def load_charge_sheet(file):
-    df_raw = pd.read_excel(file, header=None, dtype=object)
+    df_raw = pd.read_excel(file, header=None, dtype=object, engine='openpyxl')
 
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
@@ -238,10 +239,9 @@ def fetch_charge_sheet():
 @st.cache_data
 def fetch_quote_template():
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ/pub?output=xlsx"
-    buf = io.BytesIO()
-    with openpyxl.load_workbook(io.BytesIO(pd.read_excel(url, engine='openpyxl').to_excel(index=False, engine='openpyxl'))) as wb:
-        wb.save(buf)
-    buf.seek(0)
+    response = requests.get(url)
+    response.raise_for_status()
+    buf = io.BytesIO(response.content)
     return buf
 
 # ------------------------------------------------------------
