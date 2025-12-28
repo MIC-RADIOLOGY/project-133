@@ -15,13 +15,13 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     st.title("Login Required")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == "admin" and password == "Jamela2003":
+        if u == "admin" and p == "Jamela2003":
             st.session_state.logged_in = True
-            st.success("Login successful.")
+            st.success("Login successful")
         else:
             st.error("Invalid credentials")
     st.stop()
@@ -57,7 +57,7 @@ def safe_float(x, default=0.0):
         return default
 
 # ------------------------------------------------------------
-# PARSER
+# PARSER (FIXED COLUMN SHIFT)
 # ------------------------------------------------------------
 def load_charge_sheet(file):
     df_raw = pd.read_excel(file, header=None, dtype=object)
@@ -79,10 +79,7 @@ def load_charge_sheet(file):
 
         exam_u = exam.upper()
 
-        if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {
-            "XRAY", "MRI", "ULTRASOUND"
-        }:
-            MAIN_CATEGORIES.add(exam_u)
+        if exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
             current_category = exam
             current_subcategory = None
             continue
@@ -97,6 +94,21 @@ def load_charge_sheet(file):
         if not current_category:
             continue
 
+        raw_qty = clean_text(r["D_QTY"])
+        raw_amount = clean_text(r["E_AMOUNT"])
+
+        qty = safe_int(raw_qty, 1)
+        amount = safe_float(raw_amount, 0.0)
+
+        # ---- FIX MISALIGNED FEES ----
+        # If qty is unrealistically large, it is actually FEES
+        if qty > 20 and amount == 0:
+            fees = qty
+            qty = 1
+            amount = fees
+        else:
+            fees = amount / qty if qty else amount
+
         structured.append({
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
@@ -104,8 +116,9 @@ def load_charge_sheet(file):
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
             "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": clean_text(r["C_MOD"]),
-            "QTY": safe_int(r["D_QTY"], 1),
-            "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
+            "QTY": qty,
+            "FEES": round(fees, 2),
+            "AMOUNT": round(amount, 2)
         })
 
     return pd.DataFrame(structured)
@@ -135,15 +148,6 @@ def find_template_positions(ws):
                 continue
             t = str(cell.value).upper().strip()
 
-            if "PATIENT" in t:
-                pos.setdefault("patient_cell", (cell.row, cell.column))
-            if "MEMBER" in t:
-                pos.setdefault("member_cell", (cell.row, cell.column))
-            if "PROVIDER" in t or "MEDICAL AID" in t:
-                pos.setdefault("provider_cell", (cell.row, cell.column))
-            if t == "DATE":
-                pos.setdefault("date_cell", (cell.row, cell.column))
-
             if any(h in t for h in headers):
                 pos.setdefault("cols", {})
                 pos.setdefault("table_start_row", cell.row + 1)
@@ -155,7 +159,7 @@ def find_template_positions(ws):
 # ------------------------------------------------------------
 # TEMPLATE FILL
 # ------------------------------------------------------------
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
+def fill_excel_template(template_file, rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -163,28 +167,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     rowptr = pos.get("table_start_row", 22)
     total = 0.0
 
-    for sr in scan_rows:
-        desc = sr["SCAN"]
-        if not sr["IS_MAIN_SCAN"]:
+    for r in rows:
+        desc = r["SCAN"]
+        if not r["IS_MAIN_SCAN"]:
             desc = "   " + desc
 
         for c in pos["cols"].get("DESCRIPTION", []):
             write_safe(ws, rowptr, c, desc)
 
         for c in pos["cols"].get("TARIFF", []) + pos["cols"].get("TARRIF", []):
-            write_safe(ws, rowptr, c, sr["TARIFF"])
+            write_safe(ws, rowptr, c, r["TARIFF"])
 
         for c in pos["cols"].get("MOD", []):
-            write_safe(ws, rowptr, c, sr["MODIFIER"])
+            write_safe(ws, rowptr, c, r["MODIFIER"])
 
         for c in pos["cols"].get("QTY", []):
-            write_safe(ws, rowptr, c, sr["QTY"])
+            write_safe(ws, rowptr, c, r["QTY"])
 
-        fees = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
         for c in pos["cols"].get("FEES", []):
-            write_safe(ws, rowptr, c, round(fees, 2))
+            write_safe(ws, rowptr, c, r["FEES"])
 
-        total += sr["AMOUNT"]
+        for c in pos["cols"].get("AMOUNT", []):
+            write_safe(ws, rowptr, c, r["AMOUNT"])
+
+        total += r["AMOUNT"]
         rowptr += 1
 
     for c in pos["cols"].get("AMOUNT", []):
@@ -200,52 +206,41 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 # ------------------------------------------------------------
 st.title("Medical Quotation Generator")
 
-uploaded_charge = st.file_uploader("Upload Charge Sheet", type=["xlsx"])
-uploaded_template = st.file_uploader("Upload Quotation Template", type=["xlsx"])
+charge = st.file_uploader("Upload Charge Sheet", type=["xlsx"])
+template = st.file_uploader("Upload Template", type=["xlsx"])
 
-if uploaded_charge and st.button("Load Charge Sheet"):
-    st.session_state.df = load_charge_sheet(uploaded_charge)
+if charge and st.button("Load Sheet"):
+    st.session_state.df = load_charge_sheet(charge)
 
 if "df" in st.session_state:
     df = st.session_state.df
 
-    cat = st.selectbox("Main Category", sorted(df["CATEGORY"].unique()))
-    subcats = sorted(df[df["CATEGORY"] == cat]["SUBCATEGORY"].dropna().unique())
-    sub = st.selectbox("Subcategory", subcats) if subcats else None
-
-    scans = df[(df["CATEGORY"] == cat) & ((df["SUBCATEGORY"] == sub) if sub else True)]
-
-    selected_idx = st.multiselect(
+    selected = st.multiselect(
         "Select scans",
-        scans.index,
-        format_func=lambda i: scans.at[i, "SCAN"]
+        df.index,
+        format_func=lambda i: f"{df.at[i,'SCAN']} | {df.at[i,'AMOUNT']}"
     )
 
-    if selected_idx:
-        editor_df = scans.loc[selected_idx, [
-            "SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT", "IS_MAIN_SCAN"
+    if selected:
+        editor_df = df.loc[selected, [
+            "SCAN", "TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT", "IS_MAIN_SCAN"
         ]].reset_index(drop=True)
 
-        st.subheader("Edit Descriptions (Dedicated Editor)")
-        edited_df = st.data_editor(
+        st.subheader("Edit Descriptions")
+        edited = st.data_editor(
             editor_df,
-            disabled=["TARIFF", "MODIFIER", "QTY", "AMOUNT", "IS_MAIN_SCAN"],
+            disabled=["TARIFF", "MODIFIER", "QTY", "FEES", "AMOUNT", "IS_MAIN_SCAN"],
             use_container_width=True
         )
 
-        if st.button("Apply Edits"):
-            st.session_state.final_rows = edited_df.to_dict("records")
-
-    if "final_rows" in st.session_state:
         st.subheader("Preview (Read-Only)")
-        st.dataframe(pd.DataFrame(st.session_state.final_rows))
+        st.dataframe(edited)
 
-        if uploaded_template and st.button("Generate Excel"):
-            out = fill_excel_template(
-                uploaded_template, "", "", "", st.session_state.final_rows
-            )
+        if template and st.button("Generate Excel"):
+            out = fill_excel_template(template, edited.to_dict("records"))
             st.download_button(
                 "Download Quotation",
                 out,
-                "quotation.xlsx"
+                "quotation.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
