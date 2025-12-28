@@ -14,11 +14,11 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     st.title("Login Required")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u == "admin" and p == "Jamela2003":
+        if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.success("Login successful")
         else:
@@ -28,8 +28,13 @@ if not st.session_state.logged_in:
 # ------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------
-COMPONENT_KEYS = {"PELVIS", "CONSUMABLES", "FF", "IV", "IV CONTRAST"}
-GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO", ""}
+COMPONENT_KEYS = {
+    "PELVIS", "CONSUMABLES", "FF",
+    "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
+}
+
+GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
+
 MAIN_CATEGORIES = set()
 
 # ------------------------------------------------------------
@@ -40,72 +45,74 @@ def clean_text(x):
         return ""
     return str(x).replace("\xa0", " ").strip()
 
-def safe_int(x, d=1):
+def safe_int(x, default=1):
     try:
-        return int(float(str(x).replace(",", "")))
-    except:
-        return d
+        return int(float(str(x).replace(",", "").strip()))
+    except Exception:
+        return default
 
-def safe_float(x, d=0.0):
+def safe_float(x, default=0.0):
     try:
-        return float(str(x).replace(",", "")))
-    except:
-        return d
+        return float(str(x).replace(",", "").strip())
+    except Exception:
+        return default
 
 # ------------------------------------------------------------
 # PARSER
 # ------------------------------------------------------------
 def load_charge_sheet(file):
-    df = pd.read_excel(file, header=None, dtype=object)
-    while df.shape[1] < 5:
-        df[df.shape[1]] = None
+    df_raw = pd.read_excel(file, header=None, dtype=object)
 
-    df = df.iloc[:, :5]
-    df.columns = ["EXAM", "TARIFF", "MOD", "QTY", "AMOUNT"]
+    while df_raw.shape[1] < 5:
+        df_raw[df_raw.shape[1]] = None
 
-    rows = []
-    cat = None
-    sub = None
+    df_raw = df_raw.iloc[:, :5]
+    df_raw.columns = ["A_EXAM", "B_TARIFF", "C_MOD", "D_QTY", "E_AMOUNT"]
 
-    for _, r in df.iterrows():
-        exam = clean_text(r["EXAM"])
+    structured = []
+    current_category = None
+    current_subcategory = None
+
+    for _, r in df_raw.iterrows():
+        exam = clean_text(r["A_EXAM"])
         if not exam:
             continue
 
-        eu = exam.upper()
+        exam_u = exam.upper().strip()
 
-        if eu.endswith("SCAN") or eu in {"XRAY", "MRI", "ULTRASOUND"}:
-            cat = exam
-            sub = None
+        if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
+            MAIN_CATEGORIES.add(exam_u)
+            current_category = exam
+            current_subcategory = None
             continue
 
-        if eu in GARBAGE_KEYS:
+        if exam_u in GARBAGE_KEYS:
             continue
 
-        if clean_text(r["TARIFF"]) == "" and clean_text(r["AMOUNT"]) == "":
-            sub = exam
+        if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
+            current_subcategory = exam
             continue
 
-        if not cat:
+        if not current_category:
             continue
 
-        rows.append({
-            "CATEGORY": cat,
-            "SUBCATEGORY": sub,
+        structured.append({
+            "CATEGORY": current_category,
+            "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
-            "IS_MAIN_SCAN": eu not in COMPONENT_KEYS,
-            "TARIFF": safe_float(r["TARIFF"]),
-            "MODIFIER": clean_text(r["MOD"]),
-            "QTY": safe_int(r["QTY"]),
-            "AMOUNT": safe_float(r["AMOUNT"])
+            "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
+            "TARIFF": safe_float(r["B_TARIFF"]),
+            "MODIFIER": clean_text(r["C_MOD"]),
+            "QTY": safe_int(r["D_QTY"]),
+            "AMOUNT": safe_float(r["E_AMOUNT"])
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(structured)
 
 # ------------------------------------------------------------
-# EXCEL POSITION DETECTION (FIXED)
+# EXCEL POSITION SCAN (TEMPLATE-AWARE)
 # ------------------------------------------------------------
-def find_positions(ws):
+def find_template_positions(ws):
     pos = {
         "COLS": {},
         "MOD_COL": None
@@ -116,89 +123,95 @@ def find_positions(ws):
             if not cell.value:
                 continue
 
-            txt = str(cell.value).upper()
+            t = str(cell.value).upper()
 
-            if "DESCRIPTION" in txt:
+            if "DESCRIPTION" in t:
                 pos["COLS"]["DESC"] = cell.column
                 pos["START_ROW"] = cell.row + 1
 
-            if "TARIFF" in txt:
+            if "TARIFF" in t or "TARRIF" in t:
                 pos["COLS"]["TARIFF"] = cell.column
 
-            if "QTY" in txt:
+            if "QTY" in t:
                 pos["COLS"]["QTY"] = cell.column
 
-            if "FEE" in txt:
+            if "FEE" in t:
                 pos["COLS"]["FEES"] = cell.column
 
-            if "AMOUNT" in txt:
+            if "AMOUNT" in t:
                 pos["COLS"]["AMOUNT"] = cell.column
 
-            # 🔥 GUARANTEED MOD DETECTION
-            if "MOD" in txt:
+            # 🔒 CRITICAL FIX: FIRST MOD ONLY
+            if "MOD" in t and pos["MOD_COL"] is None:
                 pos["MOD_COL"] = cell.column
 
-            if "PATIENT" in txt:
+            if "PATIENT" in t:
                 pos["PATIENT"] = (cell.row, cell.column)
 
-            if "MEMBER" in txt:
+            if "MEMBER" in t:
                 pos["MEMBER"] = (cell.row, cell.column)
 
-            if "PROVIDER" in txt or "MEDICAL AID" in txt:
+            if "PROVIDER" in t or "MEDICAL AID" in t:
                 pos["PROVIDER"] = (cell.row, cell.column)
 
-            if txt.strip() == "DATE":
+            if t.strip() == "DATE":
                 pos["DATE"] = (cell.row, cell.column)
 
     return pos
 
 # ------------------------------------------------------------
-# SAFE WRITE
+# SAFE WRITE (MERGED-CELL SAFE)
 # ------------------------------------------------------------
-def write(ws, r, c, v):
+def write_safe(ws, r, c, value):
     if not c:
         return
     try:
-        ws.cell(r, c).value = v
-    except:
-        for m in ws.merged_cells.ranges:
-            if ws.cell(r, c).coordinate in m:
-                ws.cell(m.min_row, m.min_col).value = v
+        ws.cell(row=r, column=c).value = value
+    except Exception:
+        for mr in ws.merged_cells.ranges:
+            if ws.cell(r, c).coordinate in mr:
+                ws.cell(mr.min_row, mr.min_col).value = value
                 return
 
 # ------------------------------------------------------------
 # TEMPLATE FILL
 # ------------------------------------------------------------
-def fill_template(tpl, patient, member, provider, rows):
-    wb = openpyxl.load_workbook(tpl)
+def fill_excel_template(template_file, patient, member, provider, scan_rows):
+    wb = openpyxl.load_workbook(template_file)
     ws = wb.active
-    p = find_positions(ws)
+    pos = find_template_positions(ws)
 
-    if "PATIENT" in p:
-        write(ws, *p["PATIENT"], patient)
-    if "MEMBER" in p:
-        write(ws, *p["MEMBER"], member)
-    if "PROVIDER" in p:
-        write(ws, *p["PROVIDER"], provider)
-    if "DATE" in p:
-        write(ws, p["DATE"][0] + 1, p["DATE"][1],
-              datetime.today().strftime("%d/%m/%Y"))
+    if "PATIENT" in pos:
+        write_safe(ws, *pos["PATIENT"], patient)
 
-    r = p.get("START_ROW", 22)
-    total = 0
+    if "MEMBER" in pos:
+        write_safe(ws, *pos["MEMBER"], member)
 
-    for s in rows:
-        write(ws, r, p["COLS"]["DESC"],
-              s["SCAN"] if s["IS_MAIN_SCAN"] else "   " + s["SCAN"])
-        write(ws, r, p["COLS"].get("TARIFF"), s["TARIFF"])
-        write(ws, r, p["MOD_COL"], s["MODIFIER"])   # ✅ FIX
-        write(ws, r, p["COLS"].get("QTY"), s["QTY"])
-        write(ws, r, p["COLS"].get("FEES"),
-              round(s["AMOUNT"] / s["QTY"], 2))
-        total += s["AMOUNT"]
-        r += 1
+    if "PROVIDER" in pos:
+        write_safe(ws, *pos["PROVIDER"], provider)
 
-    write(ws, 22, p["COLS"].get("AMOUNT"), round(total, 2))
+    if "DATE" in pos:
+        write_safe(ws, pos["DATE"][0] + 1, pos["DATE"][1],
+                   datetime.today().strftime("%d/%m/%Y"))
+
+    rowptr = pos.get("START_ROW", 22)
+    grand_total = 0.0
+
+    for sr in scan_rows:
+        desc = sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
+
+        write_safe(ws, rowptr, pos["COLS"]["DESC"], desc)
+        write_safe(ws, rowptr, pos["COLS"].get("TARIFF"), sr["TARIFF"])
+        write_safe(ws, rowptr, pos["MOD_COL"], sr["MODIFIER"])
+        write_safe(ws, rowptr, pos["COLS"].get("QTY"), sr["QTY"])
+
+        fee = sr["AMOUNT"] / sr["QTY"] if sr["QTY"] else sr["AMOUNT"]
+        write_safe(ws, rowptr, pos["COLS"].get("FEES"), round(fee, 2))
+
+        grand_total += sr["AMOUNT"]
+        rowptr += 1
+
+    write_safe(ws, 22, pos["COLS"].get("AMOUNT"), round(grand_total, 2))
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -206,42 +219,60 @@ def fill_template(tpl, patient, member, provider, rows):
     return buf
 
 # ------------------------------------------------------------
-# UI
+# STREAMLIT UI
 # ------------------------------------------------------------
 st.title("Medical Quotation Generator")
 
-charge = st.file_uploader("Upload Charge Sheet", ["xlsx"])
-tpl = st.file_uploader("Upload Template", ["xlsx"])
+uploaded_charge = st.file_uploader("Upload Charge Sheet (Excel)", type=["xlsx"])
+uploaded_template = st.file_uploader("Upload Quotation Template (Excel)", type=["xlsx"])
 
 patient = st.text_input("Patient Name")
-member = st.text_input("Member Number")
-provider = st.text_input("Provider", "CIMAS")
+member = st.text_input("Medical Aid / Member Number")
+provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-if charge and st.button("Load Charge Sheet"):
-    st.session_state.df = load_charge_sheet(charge)
+if uploaded_charge and st.button("Load & Parse Charge Sheet"):
+    st.session_state.df = load_charge_sheet(uploaded_charge)
+    st.success("Charge sheet parsed successfully")
 
 if "df" in st.session_state:
     df = st.session_state.df
 
-    cat = st.selectbox("Category", df["CATEGORY"].unique())
-    sub = st.selectbox(
-        "Subcategory",
-        df[df["CATEGORY"] == cat]["SUBCATEGORY"].dropna().unique()
+    main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].unique()))
+    subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
+    sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
+
+    scans = (
+        df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+        if sub_sel else df[df["CATEGORY"] == main_sel]
+    ).reset_index(drop=True)
+
+    scans["label"] = scans.apply(
+        lambda r: f"{r['SCAN']} | Tariff {r['TARIFF']} | Amount {r['AMOUNT']}",
+        axis=1
     )
 
-    scans = df[(df["CATEGORY"] == cat) & (df["SUBCATEGORY"] == sub)].reset_index(drop=True)
-
-    sel = st.multiselect(
-        "Select scans",
-        scans.index,
-        format_func=lambda i: scans.at[i, "SCAN"]
+    selected = st.multiselect(
+        "Select scans to include",
+        options=list(range(len(scans))),
+        format_func=lambda i: scans.at[i, "label"]
     )
 
-    rows = [scans.iloc[i].to_dict() for i in sel]
+    selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
-    if rows:
-        st.dataframe(pd.DataFrame(rows)[["SCAN", "MODIFIER", "AMOUNT"]])
+    if selected_rows:
+        st.subheader("Preview of selected scans")
+        st.dataframe(pd.DataFrame(selected_rows)[
+            ["SCAN", "TARIFF", "MODIFIER", "QTY", "AMOUNT"]
+        ])
 
-        if tpl and st.button("Generate & Download"):
-            out = fill_template(tpl, patient, member, provider, rows)
-            st.download_button("Download", out, "quotation.xlsx")
+        if uploaded_template and st.button("Generate & Download Quotation"):
+            out = fill_excel_template(
+                uploaded_template, patient, member, provider, selected_rows
+            )
+
+            st.download_button(
+                "Download Quotation",
+                data=out,
+                file_name="quotation.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
