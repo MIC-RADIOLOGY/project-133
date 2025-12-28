@@ -213,10 +213,14 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
                    pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
                    sr["TARIFF"])
 
-        # Write MOD in both MOD and MODIFIER columns
-        mod_cols = [pos["cols"].get("MOD"), pos["cols"].get("MODIFIER")]
-        for mc in mod_cols:
-            write_safe(ws, rowptr, mc, sr["MODIFIER"])
+        # --- FIXED MOD WRITING ---
+        # Write MOD in column C (fixed)
+        write_safe(ws, rowptr, 3, sr["MODIFIER"])  # column C is 3
+
+        # Write MOD also in MODIFIER column if it exists
+        if pos["cols"].get("MODIFIER"):
+            write_safe(ws, rowptr, pos["cols"]["MODIFIER"], sr["MODIFIER"])
+        # ------------------------
 
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
