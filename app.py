@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ------------------------------------------------------------
-# LOGIN / CAPTIVE PORTAL (SAFE)
+# LOGIN / CAPTIVE PORTAL
 # ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -31,8 +31,7 @@ if not st.session_state.logged_in:
 # CONFIG
 # ------------------------------------------------------------
 COMPONENT_KEYS = {
-    "PELVIS", "CONSUMABLES", "FF",
-    "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
+    "PELVIS", "CONSUMABLES", "FF", "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
 }
 
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
@@ -193,14 +192,12 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             pos["cols"].get("DESCRIPTION"),
             sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
         )
-
         write_safe(
             ws,
             rowptr,
             pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
             sr["TARIFF"]
         )
-
         write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
@@ -215,32 +212,38 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ------------------------------------------------------------
-# LOAD EXTERNAL FILES
+# LOAD EXTERNAL FILES WITH CACHING
 # ------------------------------------------------------------
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def fetch_charge_sheet():
     url = (
         "https://docs.google.com/spreadsheets/d/e/"
         "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
         "/pub?output=xlsx"
     )
-    return load_charge_sheet(url)
+    try:
+        return load_charge_sheet(url)
+    except Exception as e:
+        st.error(f"Failed to load charge sheet: {e}")
+        return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def fetch_quote_template():
     url = (
         "https://www.dropbox.com/scl/fi/"
         "756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
         "?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
     )
-    response = requests.get(url, allow_redirects=True, timeout=30)
-    response.raise_for_status()
-    content = response.content
-    if not content.startswith(b"PK"):
-        raise ValueError(
-            "Downloaded quotation template is not a valid Excel (.xlsx) file."
-        )
-    return io.BytesIO(content)
+    try:
+        response = requests.get(url, allow_redirects=True, timeout=30)
+        response.raise_for_status()
+        content = response.content
+        if not content.startswith(b"PK"):
+            raise ValueError("Downloaded template is not a valid Excel (.xlsx) file.")
+        return io.BytesIO(content)
+    except Exception as e:
+        st.error(f"Failed to fetch template: {e}")
+        return None
 
 # ------------------------------------------------------------
 # STREAMLIT UI
@@ -257,6 +260,9 @@ if "df" not in st.session_state:
 
 df = st.session_state.df
 
+if df.empty:
+    st.stop()
+
 main_sel = st.selectbox(
     "Select Main Category",
     sorted(df["CATEGORY"].dropna().unique())
@@ -271,34 +277,47 @@ scans = (
 ).reset_index(drop=True)
 
 scans["label"] = scans.apply(
-    lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}",
-    axis=1
+    lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}", axis=1
 )
 
 selected = st.multiselect(
     "Select scans to include",
-    options=list(range(len(scans))),
+    options=scans.index.tolist(),
     format_func=lambda i: scans.at[i, "label"]
 )
 
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    st.subheader("Edit final description for Excel")
-    for i, row in enumerate(selected_rows):
-        selected_rows[i]["SCAN"] = st.text_input(
-            f"Description for '{row['SCAN']}'",
-            row["SCAN"],
-            key=f"desc_{i}"
-        )
+    # Editable table for descriptions
+    edits_df = pd.DataFrame(selected_rows)[["SCAN", "AMOUNT"]]
 
+    st.subheader("Edit final description for Excel")
+    edited_df = st.data_editor(
+        edits_df,
+        column_config={
+            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True)
+        },
+        use_container_width=True
+    )
+
+    selected_rows = edited_df.to_dict("records")
+
+    # Display grand total before download
+    total_amount = sum(r["AMOUNT"] for r in selected_rows)
+    st.metric("Grand Total", f"${total_amount:,.2f}")
+
+    # Generate and download Excel
     if st.button("Generate & Download Quotation"):
-        out = fill_excel_template(
-            fetch_quote_template(), patient, member, provider, selected_rows
-        )
-        st.download_button(
-            "Download Quotation",
-            data=out,
-            file_name="quotation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        template_file = fetch_quote_template()
+        if template_file:
+            out = fill_excel_template(
+                template_file, patient, member, provider, selected_rows
+            )
+            st.download_button(
+                "Download Quotation",
+                data=out,
+                file_name="quotation.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
