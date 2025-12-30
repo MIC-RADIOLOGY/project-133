@@ -288,10 +288,10 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Editable table
+    # Editable table (acts as both editor and preview)
     edits_df = pd.DataFrame(selected_rows)[["SCAN", "AMOUNT"]]
 
-    st.subheader("Preview & Edit Final Descriptions")
+    st.subheader("Edit and Preview Final Descriptions")
     edited_df = st.data_editor(
         edits_df,
         column_config={
@@ -301,11 +301,8 @@ if selected_rows:
         use_container_width=True
     )
 
+    # Update selected_rows
     selected_rows = edited_df.to_dict("records")
-
-    # Static preview
-    st.subheader("Selected Scans Preview")
-    st.dataframe(edited_df, use_container_width=True)
 
     # Display grand total
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
