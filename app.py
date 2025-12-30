@@ -66,7 +66,7 @@ def safe_float(x, default=0.0):
 # PARSER
 # ------------------------------------------------------------
 def load_charge_sheet(file):
-    df_raw = pd.read_excel(file, header=None, dtype=object, engine='openpyxl')
+    df_raw = pd.read_excel(file, header=None, dtype=object, engine="openpyxl")
 
     while df_raw.shape[1] < 5:
         df_raw[df_raw.shape[1]] = None
@@ -128,8 +128,7 @@ def write_safe(ws, r, c, value):
     except Exception:
         for mr in ws.merged_cells.ranges:
             if cell.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
+                ws.cell(row=mr.min_row, column=mr.min_col).value = value
                 return
 
 def append_after_label(ws, r, c, label, value):
@@ -146,8 +145,7 @@ def write_below_label(ws, r, c, value):
     except Exception:
         for mr in ws.merged_cells.ranges:
             if target.coordinate in mr:
-                start_cell = ws.cell(row=mr.min_row, column=mr.min_col)
-                start_cell.value = value
+                ws.cell(row=mr.min_row, column=mr.min_col).value = value
                 return
 
 def find_template_positions(ws):
@@ -199,19 +197,18 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        if sr["IS_MAIN_SCAN"]:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr["SCAN"])
-        else:
-            write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), "   " + sr["SCAN"])
+        desc = sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
+        write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), desc)
 
-        write_safe(ws, rowptr,
-                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-                   sr["TARIFF"])
+        write_safe(
+            ws,
+            rowptr,
+            pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
+            sr["TARIFF"]
+        )
 
-        write_safe(ws, rowptr, 3, sr["MODIFIER"])  # column C fixed
-
-        if pos["cols"].get("MODIFIER"):
-            write_safe(ws, rowptr, pos["cols"]["MODIFIER"], sr["MODIFIER"])
+        if pos["cols"].get("MOD"):
+            write_safe(ws, rowptr, pos["cols"]["MOD"], sr["MODIFIER"])
 
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
@@ -233,12 +230,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 # ------------------------------------------------------------
 @st.cache_data
 def fetch_charge_sheet():
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTE25A4jR0lf4DZJpo3u6OymUHk7wF1FPMO73d0AIUvoGzdIojubtmT-dkbp8WUlw/pub?output=xlsx"
+    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ/pub?output=xlsx"
     return load_charge_sheet(url)
 
 @st.cache_data
 def fetch_quote_template():
-    # Dropbox direct download link
     url = "https://www.dropbox.com/scl/fi/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=xd6h5z27&dl=1"
     response = requests.get(url)
     response.raise_for_status()
@@ -253,7 +249,6 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Automatically load charge sheet
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
     st.success("Charge sheet loaded automatically!")
@@ -291,10 +286,10 @@ if selected_rows:
     for i, row in enumerate(selected_rows):
         new_desc = st.text_input(
             f"Description for '{row['SCAN']}'",
-            value=row['SCAN'],
+            value=row["SCAN"],
             key=f"desc_{i}"
         )
-        selected_rows[i]['SCAN'] = new_desc
+        selected_rows[i]["SCAN"] = new_desc
 
     st.subheader("Preview of selected scans")
     st.dataframe(pd.DataFrame(selected_rows)[
