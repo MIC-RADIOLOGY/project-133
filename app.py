@@ -168,12 +168,19 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         qty = sr.get("QTY", 1)
         amount = sr.get("AMOUNT", 0.0)
 
+        # Write scan description
         write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), scan_desc)
+        
+        # Write tariff
         write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), tariff)
-        # MODIFIER goes into column C
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
+        
+        # FORCE MODIFIER into column C
+        write_safe(ws, rowptr, 3, modifier)
+        
+        # Write QTY and FEES
         write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), amount)
+        
         grand_total += amount
         rowptr += 1
 
@@ -223,7 +230,6 @@ if selected_rows:
     edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
-    # All columns editable
     edited_df = st.data_editor(
         edits_df,
         column_config={
@@ -236,7 +242,6 @@ if selected_rows:
         use_container_width=True
     )
 
-    # Save edits back
     selected_rows = edited_df.to_dict("records")
     total_amount = sum(r.get("AMOUNT", 0.0) for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
