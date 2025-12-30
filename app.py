@@ -18,13 +18,14 @@ if not st.session_state.logged_in:
     st.title("Login Required")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    
+
     if st.button("Login"):
         if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.success("Login successful! Reload or interact with the app to continue.")
         else:
             st.error("Invalid credentials")
+
     st.stop()
 
 # ------------------------------------------------------------
@@ -187,18 +188,25 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"),
-                   sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"])
+        write_safe(
+            ws,
+            rowptr,
+            pos["cols"].get("DESCRIPTION"),
+            sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
+        )
 
-        write_safe(ws, rowptr,
-                   pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-                   sr["TARIFF"])
+        write_safe(
+            ws,
+            rowptr,
+            pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
+            sr["TARIFF"]
+        )
 
         write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
         # ---------------- FIX 1 ----------------
-        # DO NOT recompute fees. AMOUNT is already final.
+        # AMOUNT is already final — do NOT recalculate
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
         # ---------------------------------------
 
@@ -213,22 +221,31 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ------------------------------------------------------------
-# LOAD FILES
+# LOAD EXTERNAL FILES
 # ------------------------------------------------------------
 @st.cache_data
 def fetch_charge_sheet():
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ/pub?output=xlsx"
+    url = (
+        "https://docs.google.com/spreadsheets/d/e/"
+        "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
+        "/pub?output=xlsx"
+    )
     return load_charge_sheet(url)
 
 @st.cache_data
 def fetch_quote_template():
     url = "https://www.dropbox.com/scl/fi/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?dl=1"
-    r = requests.get(url)
-    r.raise_for_status()
-    return io.BytesIO(r.content)
+    response = requests.get(url, allow_redirects=True, timeout=30)
+    response.raise_for_status()
+
+    content = response.content
+    if not content.startswith(b"PK"):
+        raise ValueError("Downloaded quotation template is not a valid Excel (.xlsx) file.")
+
+    return io.BytesIO(content)
 
 # ------------------------------------------------------------
-# UI
+# STREAMLIT UI
 # ------------------------------------------------------------
 st.title("Medical Quotation Generator")
 
@@ -242,14 +259,23 @@ if "df" not in st.session_state:
 
 df = st.session_state.df
 
-main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].unique()))
+main_sel = st.selectbox(
+    "Select Main Category",
+    sorted(df["CATEGORY"].dropna().unique())
+)
+
 subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
 sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-scans = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)] if sub_sel else df[df["CATEGORY"] == main_sel]
-scans = scans.reset_index(drop=True)
+scans = (
+    df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+    if sub_sel else df[df["CATEGORY"] == main_sel]
+).reset_index(drop=True)
 
-scans["label"] = scans.apply(lambda r: f"{r['SCAN']} | {r['AMOUNT']}", axis=1)
+scans["label"] = scans.apply(
+    lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}",
+    axis=1
+)
 
 selected = st.multiselect(
     "Select scans to include",
@@ -262,7 +288,11 @@ selected_rows = [scans.iloc[i].to_dict() for i in selected]
 if selected_rows:
     st.subheader("Edit final description for Excel")
     for i, row in enumerate(selected_rows):
-        selected_rows[i]["SCAN"] = st.text_input(f"Description for '{row['SCAN']}'", row["SCAN"], key=i)
+        selected_rows[i]["SCAN"] = st.text_input(
+            f"Description for '{row['SCAN']}'",
+            row["SCAN"],
+            key=f"desc_{i}"
+        )
 
     if st.button("Generate & Download Quotation"):
         out = fill_excel_template(
@@ -270,7 +300,7 @@ if selected_rows:
         )
         st.download_button(
             "Download Quotation",
-            out,
+            data=out,
             file_name="quotation.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
