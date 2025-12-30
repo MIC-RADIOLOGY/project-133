@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
 # ------------------------------------------------------------
-# LOGIN / CAPTIVE PORTAL
+# LOGIN / CAPTIVE PORTAL (SAFE)
 # ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -31,7 +31,8 @@ if not st.session_state.logged_in:
 # CONFIG
 # ------------------------------------------------------------
 COMPONENT_KEYS = {
-    "PELVIS", "CONSUMABLES", "FF", "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
+    "PELVIS", "CONSUMABLES", "FF",
+    "IV", "IV CONTRAST", "IV CONTRAST 100MLS"
 }
 
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
@@ -186,30 +187,24 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
-        # Safety: get keys with defaults to prevent KeyError
-        is_main = sr.get("IS_MAIN_SCAN", True)
-        scan_desc = sr.get("SCAN", "")
-        tariff = sr.get("TARIFF", 0.0)
-        modifier = sr.get("MODIFIER", "")
-        qty = sr.get("QTY", 1)
-        amount = sr.get("AMOUNT", 0.0)
-
         write_safe(
             ws,
             rowptr,
             pos["cols"].get("DESCRIPTION"),
-            scan_desc if is_main else "   " + scan_desc
+            sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
         )
+
         write_safe(
             ws,
             rowptr,
             pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-            tariff
+            sr["TARIFF"]
         )
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
-        grand_total += amount
+
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
+        write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
+        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
+        grand_total += sr["AMOUNT"]
         rowptr += 1
 
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
@@ -220,38 +215,32 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     return buf
 
 # ------------------------------------------------------------
-# LOAD EXTERNAL FILES WITH CACHING
+# LOAD EXTERNAL FILES
 # ------------------------------------------------------------
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def fetch_charge_sheet():
     url = (
         "https://docs.google.com/spreadsheets/d/e/"
         "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
         "/pub?output=xlsx"
     )
-    try:
-        return load_charge_sheet(url)
-    except Exception as e:
-        st.error(f"Failed to load charge sheet: {e}")
-        return pd.DataFrame()
+    return load_charge_sheet(url)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def fetch_quote_template():
     url = (
         "https://www.dropbox.com/scl/fi/"
         "756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
         "?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
     )
-    try:
-        response = requests.get(url, allow_redirects=True, timeout=30)
-        response.raise_for_status()
-        content = response.content
-        if not content.startswith(b"PK"):
-            raise ValueError("Downloaded template is not a valid Excel (.xlsx) file.")
-        return io.BytesIO(content)
-    except Exception as e:
-        st.error(f"Failed to fetch template: {e}")
-        return None
+    response = requests.get(url, allow_redirects=True, timeout=30)
+    response.raise_for_status()
+    content = response.content
+    if not content.startswith(b"PK"):
+        raise ValueError(
+            "Downloaded quotation template is not a valid Excel (.xlsx) file."
+        )
+    return io.BytesIO(content)
 
 # ------------------------------------------------------------
 # STREAMLIT UI
@@ -267,8 +256,6 @@ if "df" not in st.session_state:
     st.success("Charge sheet loaded automatically!")
 
 df = st.session_state.df
-if df.empty:
-    st.stop()
 
 main_sel = st.selectbox(
     "Select Main Category",
@@ -284,64 +271,34 @@ scans = (
 ).reset_index(drop=True)
 
 scans["label"] = scans.apply(
-    lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}", axis=1
+    lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}",
+    axis=1
 )
 
 selected = st.multiselect(
     "Select scans to include",
-    options=scans.index.tolist(),
+    options=list(range(len(scans))),
     format_func=lambda i: scans.at[i, "label"]
 )
 
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Keep all columns; SCAN editable, MODIFIER visible
-    edits_df = pd.DataFrame(selected_rows)
+    st.subheader("Edit final description for Excel")
+    for i, row in enumerate(selected_rows):
+        selected_rows[i]["SCAN"] = st.text_input(
+            f"Description for '{row['SCAN']}'",
+            row["SCAN"],
+            key=f"desc_{i}"
+        )
 
-    st.subheader("Edit and Preview Final Descriptions")
-    edited_df = st.data_editor(
-        edits_df,
-        column_config={
-            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
-            "CATEGORY": st.column_config.HiddenColumn(),
-            "SUBCATEGORY": st.column_config.HiddenColumn(),
-            "IS_MAIN_SCAN": st.column_config.HiddenColumn(),
-            "TARIFF": st.column_config.HiddenColumn(),
-            "QTY": st.column_config.HiddenColumn(),
-        },
-        use_container_width=True
-    )
-
-    # Fill missing keys to avoid KeyError
-    edited_df = edited_df.fillna({
-        "IS_MAIN_SCAN": True,
-        "TARIFF": 0.0,
-        "MODIFIER": "",
-        "QTY": 1,
-        "CATEGORY": "",
-        "SUBCATEGORY": "",
-        "AMOUNT": 0.0
-    })
-
-    selected_rows = edited_df.to_dict("records")
-
-    # Display grand total
-    total_amount = sum(r["AMOUNT"] for r in selected_rows)
-    st.metric("Grand Total", f"${total_amount:,.2f}")
-
-    # Generate & download Excel
     if st.button("Generate & Download Quotation"):
-        template_file = fetch_quote_template()
-        if template_file:
-            out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows
-            )
-            st.download_button(
-                "Download Quotation",
-                data=out,
-                file_name="quotation.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        out = fill_excel_template(
+            fetch_quote_template(), patient, member, provider, selected_rows
+        )
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name="quotation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
