@@ -288,20 +288,25 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Editable table (acts as both editor and preview)
-    edits_df = pd.DataFrame(selected_rows)[["SCAN", "AMOUNT"]]
+    # Editable preview table with MODIFIER column
+    edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
     edited_df = st.data_editor(
         edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True)
+            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
+            "CATEGORY": st.column_config.HiddenColumn(),
+            "SUBCATEGORY": st.column_config.HiddenColumn(),
+            "IS_MAIN_SCAN": st.column_config.HiddenColumn(),
+            "TARIFF": st.column_config.HiddenColumn(),
+            "QTY": st.column_config.HiddenColumn(),
         },
         use_container_width=True
     )
 
-    # Update selected_rows
     selected_rows = edited_df.to_dict("records")
 
     # Display grand total
