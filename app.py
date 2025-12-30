@@ -25,7 +25,6 @@ if not st.session_state.logged_in:
             st.success("Login successful! Reload or interact with the app to continue.")
         else:
             st.error("Invalid credentials")
-
     st.stop()
 
 # ------------------------------------------------------------
@@ -204,7 +203,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
 
         write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
-
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
         grand_total += sr["AMOUNT"]
         rowptr += 1
@@ -231,9 +229,9 @@ def fetch_charge_sheet():
 @st.cache_data
 def fetch_quote_template():
     url = (
-        "https://docs.google.com/spreadsheets/d/e/"
-        "2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ"
-        "/pub?output=xlsx"
+        "https://www.dropbox.com/scl/fi/"
+        "756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
+        "?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
     )
     response = requests.get(url, allow_redirects=True, timeout=30)
     response.raise_for_status()
