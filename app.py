@@ -205,9 +205,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
 
-        # AMOUNT is final — do NOT recalc
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
-
         grand_total += sr["AMOUNT"]
         rowptr += 1
 
@@ -232,24 +230,18 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    # Google Sheets direct XLSX export link
     url = (
         "https://docs.google.com/spreadsheets/d/e/"
-        "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
+        "2PACX-1vRzzNViIswGXCQ8MZQyCWpx-X6h4rnTFXK87viUkfSr1XXUcC4CoVg6OPBnYV-0bQ"
         "/pub?output=xlsx"
     )
-
     response = requests.get(url, allow_redirects=True, timeout=30)
     response.raise_for_status()
-
     content = response.content
-
     if not content.startswith(b"PK"):
         raise ValueError(
-            "Downloaded quotation template is not a valid Excel (.xlsx) file. "
-            "Verify Google Sheets publish settings and URL."
+            "Downloaded quotation template is not a valid Excel (.xlsx) file."
         )
-
     return io.BytesIO(content)
 
 # ------------------------------------------------------------
