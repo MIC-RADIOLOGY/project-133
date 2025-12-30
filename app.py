@@ -186,22 +186,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     grand_total = 0.0
 
     for sr in scan_rows:
+        # Safety: get keys with defaults to prevent KeyError
+        is_main = sr.get("IS_MAIN_SCAN", True)
+        scan_desc = sr.get("SCAN", "")
+        tariff = sr.get("TARIFF", 0.0)
+        modifier = sr.get("MODIFIER", "")
+        qty = sr.get("QTY", 1)
+        amount = sr.get("AMOUNT", 0.0)
+
         write_safe(
             ws,
             rowptr,
             pos["cols"].get("DESCRIPTION"),
-            sr["SCAN"] if sr["IS_MAIN_SCAN"] else "   " + sr["SCAN"]
+            scan_desc if is_main else "   " + scan_desc
         )
         write_safe(
             ws,
             rowptr,
             pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-            sr["TARIFF"]
+            tariff
         )
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr["MODIFIER"])
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), sr["QTY"])
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(sr["AMOUNT"], 2))
-        grand_total += sr["AMOUNT"]
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
+        write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
+        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
+        grand_total += amount
         rowptr += 1
 
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
@@ -288,7 +296,7 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Editable preview table with MODIFIER column
+    # Keep all columns; SCAN editable, MODIFIER visible
     edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
@@ -306,6 +314,17 @@ if selected_rows:
         },
         use_container_width=True
     )
+
+    # Fill missing keys to avoid KeyError
+    edited_df = edited_df.fillna({
+        "IS_MAIN_SCAN": True,
+        "TARIFF": 0.0,
+        "MODIFIER": "",
+        "QTY": 1,
+        "CATEGORY": "",
+        "SUBCATEGORY": "",
+        "AMOUNT": 0.0
+    })
 
     selected_rows = edited_df.to_dict("records")
 
