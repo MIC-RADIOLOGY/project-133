@@ -168,19 +168,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         qty = sr.get("QTY", 1)
         amount = sr.get("AMOUNT", 0.0)
 
-        # Write scan description
         write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), scan_desc)
-        
-        # Write tariff
         write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), tariff)
-        
-        # FORCE MODIFIER into column C
-        write_safe(ws, rowptr, 3, modifier)
-        
-        # Write QTY and FEES
+        write_safe(ws, rowptr, 3, modifier)  # MODIFIER always goes to column C
         write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), amount)
-        
         grand_total += amount
         rowptr += 1
 
@@ -227,11 +219,19 @@ selected = st.multiselect("Select scans to include", options=scans.index.tolist(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    edits_df = pd.DataFrame(selected_rows)
+    # Initialize edits_df in session_state
+    if "edits_df" not in st.session_state:
+        st.session_state.edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
+
+    # Add row button
+    if st.button("Add Row"):
+        new_row = {"SCAN": "", "MODIFIER": "", "TARIFF": 0.0, "QTY": 1, "AMOUNT": 0.0}
+        st.session_state.edits_df = pd.concat([st.session_state.edits_df, pd.DataFrame([new_row])], ignore_index=True)
+
     edited_df = st.data_editor(
-        edits_df,
+        st.session_state.edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
             "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=50),
@@ -242,7 +242,9 @@ if selected_rows:
         use_container_width=True
     )
 
+    st.session_state.edits_df = edited_df
     selected_rows = edited_df.to_dict("records")
+
     total_amount = sum(r.get("AMOUNT", 0.0) for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
