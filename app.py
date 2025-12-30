@@ -193,6 +193,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
             pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
             tariff
         )
+        # MODIFIER goes into column C (MOD)
         write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
         write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
@@ -287,25 +288,28 @@ if selected_rows:
         edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
+            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=50),
+            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),  # editable
+            "QTY": st.column_config.NumberColumn("Quantity", min_value=1),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),  # read-only
         },
         use_container_width=True
     )
 
-    # Fill missing keys to prevent KeyError
+    # Fill missing keys
     edited_df = edited_df.fillna({
         "IS_MAIN_SCAN": True,
-        "TARIFF": 0.0,
-        "MODIFIER": "",
-        "QTY": 1,
         "CATEGORY": "",
         "SUBCATEGORY": "",
+        "MODIFIER": "",
+        "TARIFF": 0.0,
+        "QTY": 1,
         "AMOUNT": 0.0
     })
 
     selected_rows = edited_df.to_dict("records")
 
+    # Show grand total
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
