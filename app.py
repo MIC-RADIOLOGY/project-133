@@ -259,7 +259,6 @@ if "df" not in st.session_state:
     st.success("Charge sheet loaded automatically!")
 
 df = st.session_state.df
-
 if df.empty:
     st.stop()
 
@@ -289,10 +288,10 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Editable table for descriptions
+    # Editable table
     edits_df = pd.DataFrame(selected_rows)[["SCAN", "AMOUNT"]]
 
-    st.subheader("Edit final description for Excel")
+    st.subheader("Preview & Edit Final Descriptions")
     edited_df = st.data_editor(
         edits_df,
         column_config={
@@ -304,11 +303,15 @@ if selected_rows:
 
     selected_rows = edited_df.to_dict("records")
 
-    # Display grand total before download
+    # Static preview
+    st.subheader("Selected Scans Preview")
+    st.dataframe(edited_df, use_container_width=True)
+
+    # Display grand total
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
-    # Generate and download Excel
+    # Generate & download Excel
     if st.button("Generate & Download Quotation"):
         template_file = fetch_quote_template()
         if template_file:
