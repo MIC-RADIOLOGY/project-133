@@ -190,7 +190,8 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=yjs9dpfa&dl=1"
+    # Direct Dropbox link
+    url = "https://dl.dropboxusercontent.com/s/iup7nwuvt5y74iu6dndak/new-template.xlsx"
     response = requests.get(url, allow_redirects=True, timeout=30)
     response.raise_for_status()
     return io.BytesIO(response.content)
@@ -219,13 +220,11 @@ selected = st.multiselect("Select scans to include", options=scans.index.tolist(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Initialize edits_df in session_state
     if "edits_df" not in st.session_state:
         st.session_state.edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
 
-    # Add row button
     if st.button("Add Row"):
         new_row = {"SCAN": "", "MODIFIER": "", "TARIFF": 0.0, "QTY": 1, "AMOUNT": 0.0}
         st.session_state.edits_df = pd.concat([st.session_state.edits_df, pd.DataFrame([new_row])], ignore_index=True)
