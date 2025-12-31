@@ -8,7 +8,9 @@ from datetime import datetime
 
 st.set_page_config(page_title="Medical Quotation Generator", layout="wide")
 
-# ------------------- LOGIN -------------------
+# ------------------------------------------------------------
+# LOGIN
+# ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
@@ -16,6 +18,7 @@ if not st.session_state.logged_in:
     st.title("Login Required")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
+
     if st.button("Login"):
         if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
@@ -24,12 +27,16 @@ if not st.session_state.logged_in:
             st.error("Invalid credentials")
     st.stop()
 
-# ------------------- CONFIG -------------------
+# ------------------------------------------------------------
+# CONFIG
+# ------------------------------------------------------------
 COMPONENT_KEYS = {"PELVIS", "CONSUMABLES", "FF", "IV", "IV CONTRAST", "IV CONTRAST 100MLS"}
 GARBAGE_KEYS = {"TOTAL", "CO-PAYMENT", "CO PAYMENT", "CO - PAYMENT", "CO", ""}
 MAIN_CATEGORIES = set()
 
-# ------------------- HELPERS -------------------
+# ------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------
 def clean_text(x):
     if pd.isna(x):
         return ""
@@ -47,7 +54,9 @@ def safe_float(x, default=0.0):
     except:
         return default
 
-# ------------------- PARSER -------------------
+# ------------------------------------------------------------
+# PARSER
+# ------------------------------------------------------------
 def load_charge_sheet(file):
     df_raw = pd.read_excel(file, header=None, dtype=object, engine="openpyxl")
     while df_raw.shape[1] < 5:
@@ -83,7 +92,7 @@ def load_charge_sheet(file):
             "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
-            "TARIFF": safe_float(r["B_TARIFF"], 0.0),
+            "TARIFF": safe_float(r["B_TARIFF"], None),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
@@ -91,7 +100,9 @@ def load_charge_sheet(file):
 
     return pd.DataFrame(structured)
 
-# ------------------- EXCEL HELPERS -------------------
+# ------------------------------------------------------------
+# EXCEL HELPERS
+# ------------------------------------------------------------
 def write_safe(ws, r, c, value):
     if not c:
         return
@@ -123,6 +134,7 @@ def write_below_label(ws, r, c, value):
 def find_template_positions(ws):
     pos = {}
     headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
+
     for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
             if not cell.value:
@@ -144,13 +156,11 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-# ------------------- FIXED TEMPLATE FILL -------------------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
-    # Fill patient/member/provider/date
     if "patient_cell" in pos:
         append_after_label(ws, *pos["patient_cell"], patient)
     if "member_cell" in pos:
@@ -160,102 +170,154 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     if "date_cell" in pos:
         write_below_label(ws, *pos["date_cell"], datetime.today().strftime("%d/%m/%Y"))
 
-    # Determine column positions with fallbacks
-    desc_col   = pos["cols"].get("DESCRIPTION")
-    tariff_col = pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF")
-    mod_col    = pos["cols"].get("MOD") or 3
-    qty_col    = pos["cols"].get("QTY")
-    amount_col = pos["cols"].get("AMOUNT") or pos["cols"].get("FEES")
-
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
     for sr in scan_rows:
-        write_safe(ws, rowptr, desc_col, sr.get("SCAN", ""))
-        write_safe(ws, rowptr, tariff_col, sr.get("TARIFF", 0.0))
-        write_safe(ws, rowptr, mod_col, sr.get("MODIFIER", ""))
-        write_safe(ws, rowptr, qty_col, sr.get("QTY", 1))
-        write_safe(ws, rowptr, amount_col, sr.get("AMOUNT", 0.0))
+        is_main = sr.get("IS_MAIN_SCAN", True)
+        scan_desc = sr.get("SCAN", "")
+        tariff = sr.get("TARIFF", 0.0)
+        modifier = sr.get("MODIFIER", "")
+        qty = sr.get("QTY", 1)
+        amount = sr.get("AMOUNT", 0.0)
 
-        grand_total += sr.get("AMOUNT", 0.0)
+        write_safe(
+            ws,
+            rowptr,
+            pos["cols"].get("DESCRIPTION"),
+            scan_desc if is_main else "   " + scan_desc
+        )
+        write_safe(
+            ws,
+            rowptr,
+            pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
+            tariff
+        )
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
+        write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
+        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
+        grand_total += amount
         rowptr += 1
 
-    # Write grand total at the end
-    if amount_col:
-        write_safe(ws, rowptr, amount_col, round(grand_total, 2))
-
+    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
-# ------------------- LOAD FILES -------------------
-@st.cache_data
+# ------------------------------------------------------------
+# LOAD EXTERNAL FILES
+# ------------------------------------------------------------
+@st.cache_data(show_spinner=False)
 def fetch_charge_sheet():
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ/pub?output=xlsx"
-    return load_charge_sheet(url)
+    url = (
+        "https://docs.google.com/spreadsheets/d/e/"
+        "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
+        "/pub?output=xlsx"
+    )
+    try:
+        return load_charge_sheet(url)
+    except Exception as e:
+        st.error(f"Failed to load charge sheet: {e}")
+        return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def fetch_quote_template():
-    url = "https://www.dropbox.com/scl/fi/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
-    response = requests.get(url, allow_redirects=True, timeout=30)
-    response.raise_for_status()
-    return io.BytesIO(response.content)
+    url = (
+        "https://www.dropbox.com/scl/fi/"
+        "756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
+        "?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
+    )
+    try:
+        response = requests.get(url, allow_redirects=True, timeout=30)
+        response.raise_for_status()
+        content = response.content
+        if not content.startswith(b"PK"):
+            raise ValueError("Downloaded template is not a valid Excel (.xlsx) file.")
+        return io.BytesIO(content)
+    except Exception as e:
+        st.error(f"Failed to fetch template: {e}")
+        return None
 
-# ------------------- STREAMLIT UI -------------------
+# ------------------------------------------------------------
+# STREAMLIT UI
+# ------------------------------------------------------------
 st.title("Medical Quotation Generator")
+
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
+    st.success("Charge sheet loaded automatically!")
 
 df = st.session_state.df
 if df.empty:
     st.stop()
 
-main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].dropna().unique()))
+main_sel = st.selectbox(
+    "Select Main Category",
+    sorted(df["CATEGORY"].dropna().unique())
+)
+
 subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
 sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-scans = df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)].reset_index(drop=True) if sub_sel else df[df["CATEGORY"] == main_sel].reset_index(drop=True)
+scans = (
+    df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
+    if sub_sel else df[df["CATEGORY"] == main_sel]
+).reset_index(drop=True)
+
 scans["label"] = scans.apply(lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}", axis=1)
 
-selected = st.multiselect("Select scans to include", options=scans.index.tolist(), format_func=lambda i: scans.at[i, "label"])
+selected = st.multiselect(
+    "Select scans to include",
+    options=scans.index.tolist(),
+    format_func=lambda i: scans.at[i, "label"]
+)
+
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Initialize edits_df in session_state
-    if "edits_df" not in st.session_state:
-        st.session_state.edits_df = pd.DataFrame(selected_rows)
+    edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
-
-    # Add row button
-    if st.button("Add Row"):
-        new_row = {"SCAN": "", "MODIFIER": "", "TARIFF": 0.0, "QTY": 1, "AMOUNT": 0.0}
-        st.session_state.edits_df = pd.concat([st.session_state.edits_df, pd.DataFrame([new_row])], ignore_index=True)
-
     edited_df = st.data_editor(
-        st.session_state.edits_df,
+        edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=50),
-            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),
-            "QTY": st.column_config.NumberColumn("Quantity", min_value=1),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
+            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
         },
         use_container_width=True
     )
 
-    st.session_state.edits_df = edited_df
+    # Fill missing keys to prevent KeyError
+    edited_df = edited_df.fillna({
+        "IS_MAIN_SCAN": True,
+        "TARIFF": 0.0,
+        "MODIFIER": "",
+        "QTY": 1,
+        "CATEGORY": "",
+        "SUBCATEGORY": "",
+        "AMOUNT": 0.0
+    })
+
     selected_rows = edited_df.to_dict("records")
 
-    total_amount = sum(r.get("AMOUNT", 0.0) for r in selected_rows)
+    total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
     if st.button("Generate & Download Quotation"):
         template_file = fetch_quote_template()
-        out = fill_excel_template(template_file, patient, member, provider, selected_rows)
-        st.download_button("Download Quotation", data=out, file_name="quotation.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if template_file:
+            out = fill_excel_template(
+                template_file, patient, member, provider, selected_rows
+            )
+            st.download_button(
+                "Download Quotation",
+                data=out,
+                file_name="quotation.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
