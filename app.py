@@ -125,16 +125,13 @@ def write_below_label(ws, r, c, value):
 
 def find_template_positions(ws):
     pos = {}
-
-    # 🔧 FIX: include MODIFIER and normalize to MOD
-    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "MODIFIER", "QTY", "FEES", "AMOUNT"]
+    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "QTY", "FEES", "AMOUNT"]
 
     for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
             if not cell.value:
                 continue
-
-            t = str(cell.value).upper().strip()
+            t = str(cell.value).upper()
 
             if "PATIENT" in t:
                 pos["patient_cell"] = (cell.row, cell.column)
@@ -142,18 +139,15 @@ def find_template_positions(ws):
                 pos["member_cell"] = (cell.row, cell.column)
             if "PROVIDER" in t or "MEDICAL AID" in t:
                 pos["provider_cell"] = (cell.row, cell.column)
-            if t == "DATE":
+            if t.strip() == "DATE":
                 pos["date_cell"] = (cell.row, cell.column)
 
             if any(h in t for h in headers):
                 pos.setdefault("cols", {})
                 pos["table_start_row"] = cell.row + 1
-
                 for h in headers:
                     if h in t:
-                        key = "MOD" if h in ("MOD", "MODIFIER") else h
-                        pos["cols"][key] = cell.column
-
+                        pos["cols"][h] = cell.column
     return pos
 
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -176,7 +170,10 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     for sr in scan_rows:
         write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr.get("SCAN"))
         write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), sr.get("TARIFF"))
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr.get("MODIFIER"))
+
+        # ✅ FORCE MODIFIER INTO COLUMN C
+        write_safe(ws, rowptr, 3, sr.get("MODIFIER"))
+
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr.get("QTY"))
         write_safe(ws, rowptr, pos["cols"].get("FEES"), sr.get("AMOUNT"))
 
@@ -198,7 +195,7 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=yjs9dpfa&dl=1"
+    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?dl=1"
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return io.BytesIO(r.content)
@@ -234,13 +231,6 @@ if selected_rows:
         st.session_state.edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
-
-    if st.button("Add Row"):
-        st.session_state.edits_df = pd.concat(
-            [st.session_state.edits_df,
-             pd.DataFrame([{"SCAN": "", "MODIFIER": "", "TARIFF": 0.0, "QTY": 1, "AMOUNT": 0.0}])],
-            ignore_index=True
-        )
 
     edited_df = st.data_editor(st.session_state.edits_df, use_container_width=True)
     st.session_state.edits_df = edited_df
