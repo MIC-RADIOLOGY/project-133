@@ -85,7 +85,6 @@ def load_charge_sheet(file):
             "CATEGORY": current_category,
             "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
-            "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
             "TARIFF": safe_float(r["B_TARIFF"], 0.0),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
@@ -148,6 +147,7 @@ def find_template_positions(ws):
                 for h in headers:
                     if h in t:
                         pos["cols"][h] = cell.column
+
     return pos
 
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -171,7 +171,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr.get("SCAN"))
         write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), sr.get("TARIFF"))
 
-        # ✅ FORCE MODIFIER INTO COLUMN C
+        # ✅ MODIFIER FORCED TO COLUMN C
         write_safe(ws, rowptr, 3, sr.get("MODIFIER"))
 
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr.get("QTY"))
@@ -196,8 +196,13 @@ def fetch_charge_sheet():
 @st.cache_data
 def fetch_quote_template():
     url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?dl=1"
-    r = requests.get(url, timeout=30)
+    r = requests.get(url, allow_redirects=True, timeout=30)
     r.raise_for_status()
+
+    # Prevent BadZipFile from HTML responses
+    if b"<html" in r.content[:500].lower():
+        raise RuntimeError("Dropbox returned HTML instead of an Excel file")
+
     return io.BytesIO(r.content)
 
 # ------------------- STREAMLIT UI -------------------
