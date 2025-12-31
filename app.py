@@ -144,11 +144,13 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
+# ------------------- FIXED TEMPLATE FILL -------------------
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
 
+    # Fill patient/member/provider/date
     if "patient_cell" in pos:
         append_after_label(ws, *pos["patient_cell"], patient)
     if "member_cell" in pos:
@@ -158,25 +160,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     if "date_cell" in pos:
         write_below_label(ws, *pos["date_cell"], datetime.today().strftime("%d/%m/%Y"))
 
+    # Determine column positions with fallbacks
+    desc_col   = pos["cols"].get("DESCRIPTION")
+    tariff_col = pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF")
+    mod_col    = pos["cols"].get("MOD") or 3
+    qty_col    = pos["cols"].get("QTY")
+    amount_col = pos["cols"].get("AMOUNT") or pos["cols"].get("FEES")
+
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
     for sr in scan_rows:
-        scan_desc = sr.get("SCAN", "")
-        tariff = sr.get("TARIFF", 0.0)
-        modifier = sr.get("MODIFIER", "")
-        qty = sr.get("QTY", 1)
-        amount = sr.get("AMOUNT", 0.0)
+        write_safe(ws, rowptr, desc_col, sr.get("SCAN", ""))
+        write_safe(ws, rowptr, tariff_col, sr.get("TARIFF", 0.0))
+        write_safe(ws, rowptr, mod_col, sr.get("MODIFIER", ""))
+        write_safe(ws, rowptr, qty_col, sr.get("QTY", 1))
+        write_safe(ws, rowptr, amount_col, sr.get("AMOUNT", 0.0))
 
-        write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), scan_desc)
-        write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), tariff)
-        write_safe(ws, rowptr, 3, modifier)  # MODIFIER always goes to column C
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), amount)
-        grand_total += amount
+        grand_total += sr.get("AMOUNT", 0.0)
         rowptr += 1
 
-    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
+    # Write grand total at the end
+    if amount_col:
+        write_safe(ws, rowptr, amount_col, round(grand_total, 2))
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
