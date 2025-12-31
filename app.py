@@ -92,7 +92,7 @@ def load_charge_sheet(file):
             "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
-            "TARIFF": safe_float(r["B_TARIFF"], None),
+            "TARIFF": safe_float(r["B_TARIFF"], 0.0),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
@@ -280,21 +280,27 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    edits_df = pd.DataFrame(selected_rows)
+    # Initialize editable DataFrame
+    if "edits_df" not in st.session_state:
+        st.session_state.edits_df = pd.DataFrame(selected_rows)
+    else:
+        # Update edits_df with latest selection
+        st.session_state.edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
     edited_df = st.data_editor(
-        edits_df,
+        st.session_state.edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
+            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=50),
+            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),
+            "QTY": st.column_config.NumberColumn("Quantity", min_value=1),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
         },
         use_container_width=True
     )
 
-    # Fill missing keys to prevent KeyError
-    edited_df = edited_df.fillna({
+    st.session_state.edits_df = edited_df.fillna({
         "IS_MAIN_SCAN": True,
         "TARIFF": 0.0,
         "MODIFIER": "",
@@ -304,8 +310,7 @@ if selected_rows:
         "AMOUNT": 0.0
     })
 
-    selected_rows = edited_df.to_dict("records")
-
+    selected_rows = st.session_state.edits_df.to_dict("records")
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
