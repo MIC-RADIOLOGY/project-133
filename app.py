@@ -167,7 +167,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
     for sr in scan_rows:
         write_safe(ws, rowptr, pos["cols"].get("DESCRIPTION"), sr.get("SCAN"))
         write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), sr.get("TARIFF"))
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr.get("MODIFIER"))  # ✅ FIXED
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), sr.get("MODIFIER"))
         write_safe(ws, rowptr, pos["cols"].get("QTY"), sr.get("QTY"))
         write_safe(ws, rowptr, pos["cols"].get("FEES"), sr.get("AMOUNT"))
 
@@ -189,7 +189,7 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    url = "https://www.dropbox.com/scl/fi/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx?dl=1"
+    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=yjs9dpfa&dl=1"
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return io.BytesIO(r.content)
