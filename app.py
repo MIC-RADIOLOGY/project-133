@@ -125,26 +125,35 @@ def write_below_label(ws, r, c, value):
 
 def find_template_positions(ws):
     pos = {}
-    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "QTY", "FEES", "AMOUNT"]
+
+    # 🔧 FIX: include MODIFIER and normalize to MOD
+    headers = ["DESCRIPTION", "TARIFF", "TARRIF", "MOD", "MODIFIER", "QTY", "FEES", "AMOUNT"]
+
     for row in ws.iter_rows(min_row=1, max_row=200):
         for cell in row:
             if not cell.value:
                 continue
-            t = str(cell.value).upper()
+
+            t = str(cell.value).upper().strip()
+
             if "PATIENT" in t:
                 pos["patient_cell"] = (cell.row, cell.column)
             if "MEMBER" in t:
                 pos["member_cell"] = (cell.row, cell.column)
             if "PROVIDER" in t or "MEDICAL AID" in t:
                 pos["provider_cell"] = (cell.row, cell.column)
-            if t.strip() == "DATE":
+            if t == "DATE":
                 pos["date_cell"] = (cell.row, cell.column)
+
             if any(h in t for h in headers):
                 pos.setdefault("cols", {})
                 pos["table_start_row"] = cell.row + 1
+
                 for h in headers:
                     if h in t:
-                        pos["cols"][h] = cell.column
+                        key = "MOD" if h in ("MOD", "MODIFIER") else h
+                        pos["cols"][key] = cell.column
+
     return pos
 
 def fill_excel_template(template_file, patient, member, provider, scan_rows):
@@ -233,11 +242,7 @@ if selected_rows:
             ignore_index=True
         )
 
-    edited_df = st.data_editor(
-        st.session_state.edits_df,
-        use_container_width=True
-    )
-
+    edited_df = st.data_editor(st.session_state.edits_df, use_container_width=True)
     st.session_state.edits_df = edited_df
     selected_rows = edited_df.to_dict("records")
 
