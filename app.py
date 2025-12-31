@@ -223,10 +223,9 @@ def fetch_charge_sheet():
 
 @st.cache_data(show_spinner=False)
 def fetch_quote_template():
-    # Direct download Dropbox link
-    url = "https://dl.dropboxusercontent.com/s/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
+    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=oxytxpph&dl=1"
     try:
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, allow_redirects=True, timeout=30)
         response.raise_for_status()
         content = response.content
         if not content.startswith(b"PK"):
