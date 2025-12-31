@@ -190,9 +190,9 @@ def fetch_charge_sheet():
 
 @st.cache_data
 def fetch_quote_template():
-    # Direct Dropbox link
-    url = "https://dl.dropboxusercontent.com/s/iup7nwuvt5y74iu6dndak/new-template.xlsx"
-    response = requests.get(url, allow_redirects=True, timeout=30)
+    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=q1dy27l6&dl=1"
+    headers = {"User-Agent": "Mozilla/5.0"}  # bypass redirect/auth issues
+    response = requests.get(url, allow_redirects=True, headers=headers, timeout=30)
     response.raise_for_status()
     return io.BytesIO(response.content)
 
