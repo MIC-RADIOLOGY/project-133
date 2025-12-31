@@ -223,13 +223,10 @@ def fetch_charge_sheet():
 
 @st.cache_data(show_spinner=False)
 def fetch_quote_template():
-    url = (
-        "https://www.dropbox.com/scl/fi/"
-        "756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
-        "?rlkey=vb3y4jm5wpxk1pdzuft2uloen&st=3b4uj9wh&dl=1"
-    )
+    # Direct download Dropbox link
+    url = "https://dl.dropboxusercontent.com/s/756629fqxe2xsnpik50t6/QOUTE-Q.xlsx"
     try:
-        response = requests.get(url, allow_redirects=True, timeout=30)
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
         content = response.content
         if not content.startswith(b"PK"):
@@ -293,7 +290,6 @@ if selected_rows:
         use_container_width=True
     )
 
-    # Fill missing keys to prevent KeyError
     edited_df = edited_df.fillna({
         "IS_MAIN_SCAN": True,
         "TARIFF": 0.0,
