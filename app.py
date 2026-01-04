@@ -156,7 +156,7 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-def fill_excel_template(template_file, patient, member, provider, scan_rows, date_value=None, full_scan_name=""):
+def fill_excel_template(template_file, patient, member, provider, scan_rows, date_value=None):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -170,23 +170,12 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     if "date_cell" in pos and date_value:
         write_below_label(ws, *pos["date_cell"], date_value.strftime("%d/%m/%Y"))
 
-    description_col = pos["cols"].get("DESCRIPTION")
-    if not description_col:
-        st.error("Could not find DESCRIPTION column in template. Check the header.")
-        return None
-
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
-    # Debug log
-    st.write("DEBUG: Starting Excel rowptr =", rowptr)
-    st.write("DEBUG: Number of selected scans =", len(scan_rows))
-    st.write("DEBUG: Full scan name =", full_scan_name)
-
-    # Write selected scans
     for sr in scan_rows:
         is_main = sr.get("IS_MAIN_SCAN", True)
-        scan_desc = sr.get("FINAL_SCAN") or sr.get("SCAN", "")
+        scan_desc = sr.get("SCAN", "")
         tariff = sr.get("TARIFF", 0.0)
         modifier = sr.get("MODIFIER", "")
         qty = sr.get("QTY", 1)
@@ -195,7 +184,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(
             ws,
             rowptr,
-            description_col,
+            pos["cols"].get("DESCRIPTION"),
             scan_desc if is_main else "   " + scan_desc
         )
         write_safe(
@@ -208,17 +197,6 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
         grand_total += amount
-        rowptr += 1
-        st.write(f"DEBUG: Wrote scan '{scan_desc}' at row {rowptr-1}")
-
-    # Add full scan name as separate row if provided
-    if full_scan_name.strip():
-        write_safe(ws, rowptr, description_col, full_scan_name.strip())
-        write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), 0)
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), "")
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), 1)
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), 0.0)
-        st.write(f"DEBUG: Wrote full scan '{full_scan_name.strip()}' at row {rowptr}")
         rowptr += 1
 
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
@@ -266,12 +244,9 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Full scan name input (moved above date)
-full_scan_name = st.text_input("Full Scan Name for Details List", value="")
-
+# NEW: Date input
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
-# Load charge sheet
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
     st.success("Charge sheet loaded automatically!")
@@ -306,14 +281,11 @@ selected_rows = [scans.iloc[i].to_dict() for i in selected]
 if selected_rows:
     edits_df = pd.DataFrame(selected_rows)
 
-    if "FINAL_SCAN" not in edits_df.columns:
-        edits_df["FINAL_SCAN"] = edits_df["SCAN"]
-
     st.subheader("Edit and Preview Final Descriptions")
     edited_df = st.data_editor(
         edits_df,
         column_config={
-            "FINAL_SCAN": st.column_config.TextColumn("Final Description", max_chars=100),
+            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
             "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
             "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
         },
@@ -339,14 +311,11 @@ if selected_rows:
         template_file = fetch_quote_template()
         if template_file:
             out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows,
-                date_value=quotation_date,
-                full_scan_name=full_scan_name
+                template_file, patient, member, provider, selected_rows, date_value=quotation_date
             )
-            if out:
-                st.download_button(
-                    "Download Quotation",
-                    data=out,
-                    file_name="quotation.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                "Download Quotation",
+                data=out,
+                file_name="quotation.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
