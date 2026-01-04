@@ -178,6 +178,11 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
+    # Debug log
+    st.write("DEBUG: Starting Excel rowptr =", rowptr)
+    st.write("DEBUG: Number of selected scans =", len(scan_rows))
+    st.write("DEBUG: Full scan name =", full_scan_name)
+
     # Write selected scans
     for sr in scan_rows:
         is_main = sr.get("IS_MAIN_SCAN", True)
@@ -204,6 +209,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
         grand_total += amount
         rowptr += 1
+        st.write(f"DEBUG: Wrote scan '{scan_desc}' at row {rowptr-1}")
 
     # Add full scan name as separate row if provided
     if full_scan_name.strip():
@@ -212,6 +218,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(ws, rowptr, pos["cols"].get("MOD"), "")
         write_safe(ws, rowptr, pos["cols"].get("QTY"), 1)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), 0.0)
+        st.write(f"DEBUG: Wrote full scan '{full_scan_name.strip()}' at row {rowptr}")
         rowptr += 1
 
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
