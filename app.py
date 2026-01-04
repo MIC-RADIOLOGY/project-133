@@ -279,39 +279,41 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    edits_df = pd.DataFrame(selected_rows)
+    # Store editable DF in session state
+    if "editable_df" not in st.session_state:
+        st.session_state.editable_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
 
-    # Add custom scan button
+    # Button to add custom scan
     if st.button("Add Custom Scan"):
-        edits_df = pd.concat([
-            edits_df,
-            pd.DataFrame([{
-                "SCAN": "",
-                "MODIFIER": "",
-                "TARIFF": 0.0,
-                "QTY": 1,
-                "AMOUNT": 0.0,
-                "IS_MAIN_SCAN": True,
-                "CATEGORY": "",
-                "SUBCATEGORY": ""
-            }])
-        ], ignore_index=True)
+        new_row = pd.DataFrame([{
+            "SCAN": "",
+            "MODIFIER": "",
+            "TARIFF": 0.0,
+            "QTY": 1,
+            "AMOUNT": 0.0,
+            "IS_MAIN_SCAN": True,
+            "CATEGORY": "",
+            "SUBCATEGORY": ""
+        }])
+        st.session_state.editable_df = pd.concat([st.session_state.editable_df, new_row], ignore_index=True)
 
-    edited_df = st.data_editor(
-        edits_df,
+    # Editable data editor
+    st.session_state.editable_df = st.data_editor(
+        st.session_state.editable_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=10),  # Editable
-            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),   # Editable
+            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=10),
+            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),
             "QTY": st.column_config.NumberColumn("Qty", min_value=1, step=1),
             "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
         },
         use_container_width=True
     )
 
-    edited_df = edited_df.fillna({
+    # Fill missing values
+    st.session_state.editable_df = st.session_state.editable_df.fillna({
         "IS_MAIN_SCAN": True,
         "TARIFF": 0.0,
         "MODIFIER": "",
@@ -321,8 +323,7 @@ if selected_rows:
         "AMOUNT": 0.0
     })
 
-    selected_rows = edited_df.to_dict("records")
-
+    selected_rows = st.session_state.editable_df.to_dict("records")
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
