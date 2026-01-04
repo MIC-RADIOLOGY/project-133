@@ -248,9 +248,15 @@ st.title("Medical Quotation Generator")
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
+# NEW: Final Quotation Name input
+final_quotation_name = st.text_input(
+    "Final Quotation Name / Scan Description",
+    value=""
+)
+
+# Load charge sheet
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
     st.success("Charge sheet loaded automatically!")
@@ -311,6 +317,11 @@ if selected_rows:
     })
 
     selected_rows = edited_df.to_dict("records")
+
+    # Apply final quotation name to all rows if provided
+    if final_quotation_name.strip():
+        for r in selected_rows:
+            r["FINAL_SCAN"] = final_quotation_name.strip()
 
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
