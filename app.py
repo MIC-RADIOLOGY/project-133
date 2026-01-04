@@ -22,7 +22,7 @@ if not st.session_state.logged_in:
     if st.button("Login"):
         if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
-            st.success("Login successful! Reload or interact with the app to continue.")
+            st.success("Login successful.")
         else:
             st.error("Invalid credentials")
     st.stop()
@@ -72,18 +72,22 @@ def load_charge_sheet(file):
         exam = clean_text(r["A_EXAM"])
         if not exam:
             continue
-        exam_u = exam.upper().strip()
 
-        if exam_u in MAIN_CATEGORIES or exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
-            MAIN_CATEGORIES.add(exam_u)
+        exam_u = exam.upper()
+
+        if exam_u.endswith("SCAN") or exam_u in {"XRAY", "MRI", "ULTRASOUND"}:
             current_category = exam
+            MAIN_CATEGORIES.add(exam_u)
             current_subcategory = None
             continue
+
         if exam_u in GARBAGE_KEYS:
             continue
+
         if clean_text(r["B_TARIFF"]) == "" and clean_text(r["E_AMOUNT"]) == "":
             current_subcategory = exam
             continue
+
         if not current_category:
             continue
 
@@ -92,7 +96,7 @@ def load_charge_sheet(file):
             "SUBCATEGORY": current_subcategory,
             "SCAN": exam,
             "IS_MAIN_SCAN": exam_u not in COMPONENT_KEYS,
-            "TARIFF": safe_float(r["B_TARIFF"], None),
+            "TARIFF": safe_float(r["B_TARIFF"], 0.0),
             "MODIFIER": clean_text(r["C_MOD"]),
             "QTY": safe_int(r["D_QTY"], 1),
             "AMOUNT": safe_float(r["E_AMOUNT"], 0.0)
@@ -118,8 +122,7 @@ def append_after_label(ws, r, c, value):
     if not value:
         return
     cell = ws.cell(row=r, column=c)
-    existing = str(cell.value) if cell.value else ""
-    cell.value = f"{existing.strip()} {value}".strip()
+    cell.value = f"{cell.value or ''} {value}".strip()
 
 def write_below_label(ws, r, c, value):
     target = ws.cell(row=r + 1, column=c)
@@ -129,7 +132,6 @@ def write_below_label(ws, r, c, value):
         for mr in ws.merged_cells.ranges:
             if target.coordinate in mr:
                 ws.cell(row=mr.min_row, column=mr.min_col).value = value
-                return
 
 def find_template_positions(ws):
     pos = {}
@@ -140,6 +142,7 @@ def find_template_positions(ws):
             if not cell.value:
                 continue
             t = str(cell.value).upper()
+
             if "PATIENT" in t:
                 pos["patient_cell"] = (cell.row, cell.column)
             if "MEMBER" in t:
@@ -148,6 +151,7 @@ def find_template_positions(ws):
                 pos["provider_cell"] = (cell.row, cell.column)
             if t.strip() == "DATE":
                 pos["date_cell"] = (cell.row, cell.column)
+
             if any(h in t for h in headers):
                 pos.setdefault("cols", {})
                 pos["table_start_row"] = cell.row + 1
@@ -160,6 +164,15 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
+
+    # ---- HARD FALLBACKS (CRITICAL FIX) ----
+    cols = pos.get("cols", {})
+    cols.setdefault("DESCRIPTION", 1)
+    cols.setdefault("TARIFF", 2)
+    cols.setdefault("MOD", 3)
+    cols.setdefault("QTY", 4)
+    cols.setdefault("FEES", 5)
+    cols.setdefault("AMOUNT", 5)
 
     if "patient_cell" in pos:
         append_after_label(ws, *pos["patient_cell"], patient)
@@ -174,39 +187,30 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     grand_total = 0.0
 
     for sr in scan_rows:
-        is_main = sr.get("IS_MAIN_SCAN", True)
-        scan_desc = sr.get("SCAN", "")
+        scan_desc = str(sr.get("SCAN", "")).strip()
         tariff = sr.get("TARIFF", 0.0)
-        modifier = sr.get("MODIFIER", "")
         qty = sr.get("QTY", 1)
-        amount = sr.get("AMOUNT", 0.0)
+        modifier = sr.get("MODIFIER", "")
+        amount = round((tariff or 0) * (qty or 1), 2)
 
-        write_safe(
-            ws,
-            rowptr,
-            pos["cols"].get("DESCRIPTION"),
-            scan_desc if is_main else "   " + scan_desc
-        )
-        write_safe(
-            ws,
-            rowptr,
-            pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"),
-            tariff
-        )
-        write_safe(ws, rowptr, pos["cols"].get("MOD"), modifier)
-        write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
-        write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
+        write_safe(ws, rowptr, cols["DESCRIPTION"], scan_desc)
+        write_safe(ws, rowptr, cols["TARIFF"], tariff)
+        write_safe(ws, rowptr, cols["MOD"], modifier)
+        write_safe(ws, rowptr, cols["QTY"], qty)
+        write_safe(ws, rowptr, cols["FEES"], amount)
+
         grand_total += amount
         rowptr += 1
 
-    write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
+    write_safe(ws, rowptr + 1, cols["AMOUNT"], round(grand_total, 2))
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
 # ------------------------------------------------------------
-# LOAD EXTERNAL FILES
+# LOAD FILES
 # ------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def fetch_charge_sheet():
@@ -215,107 +219,77 @@ def fetch_charge_sheet():
         "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
         "/pub?output=xlsx"
     )
-    try:
-        return load_charge_sheet(url)
-    except Exception as e:
-        st.error(f"Failed to load charge sheet: {e}")
-        return pd.DataFrame()
+    return load_charge_sheet(url)
 
 @st.cache_data(show_spinner=False)
 def fetch_quote_template():
-    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?rlkey=5oleriordmi3bktx2f8kx36ew&st=oxytxpph&dl=1"
-    try:
-        response = requests.get(url, allow_redirects=True, timeout=30)
-        response.raise_for_status()
-        content = response.content
-        if not content.startswith(b"PK"):
-            raise ValueError("Downloaded template is not a valid Excel (.xlsx) file.")
-        return io.BytesIO(content)
-    except Exception as e:
-        st.error(f"Failed to fetch template: {e}")
-        return None
+    url = "https://www.dropbox.com/scl/fi/iup7nwuvt5y74iu6dndak/new-template.xlsx?dl=1"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    return io.BytesIO(r.content)
 
 # ------------------------------------------------------------
-# STREAMLIT UI
+# UI
 # ------------------------------------------------------------
 st.title("Medical Quotation Generator")
 
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-
-# NEW: Date input
-quotation_date = st.date_input("Quotation Date", value=datetime.today())
+quotation_date = st.date_input("Quotation Date", datetime.today())
 
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
-    st.success("Charge sheet loaded automatically!")
 
 df = st.session_state.df
-if df.empty:
-    st.stop()
 
-main_sel = st.selectbox(
-    "Select Main Category",
-    sorted(df["CATEGORY"].dropna().unique())
-)
-
-subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
-sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
-
-scans = (
-    df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
-    if sub_sel else df[df["CATEGORY"] == main_sel]
-).reset_index(drop=True)
-
-scans["label"] = scans.apply(lambda r: f"{r['SCAN']} | Amount {r['AMOUNT']}", axis=1)
+main_sel = st.selectbox("Select Main Category", sorted(df["CATEGORY"].unique()))
+scans = df[df["CATEGORY"] == main_sel].reset_index(drop=True)
 
 selected = st.multiselect(
-    "Select scans to include",
-    options=scans.index.tolist(),
-    format_func=lambda i: scans.at[i, "label"]
+    "Select scans",
+    scans.index.tolist(),
+    format_func=lambda i: scans.at[i, "SCAN"]
 )
 
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
-if selected_rows:
-    edits_df = pd.DataFrame(selected_rows)
+if st.button("➕ Add Custom Line Item"):
+    selected_rows.append({
+        "CATEGORY": "CUSTOM",
+        "SUBCATEGORY": None,
+        "SCAN": "ON-CALL TARIFF",
+        "TARIFF": 0.0,
+        "QTY": 1,
+        "MODIFIER": "",
+        "AMOUNT": 0.0
+    })
 
-    st.subheader("Edit and Preview Final Descriptions")
-    edited_df = st.data_editor(
-        edits_df,
+if selected_rows:
+    edit_df = pd.DataFrame(selected_rows)
+
+    edit_df = st.data_editor(
+        edit_df,
         column_config={
-            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
+            "SCAN": st.column_config.TextColumn("Final Description"),
+            "TARIFF": st.column_config.NumberColumn("Tariff"),
+            "QTY": st.column_config.NumberColumn("Qty", min_value=1),
         },
         use_container_width=True
     )
 
-    edited_df = edited_df.fillna({
-        "IS_MAIN_SCAN": True,
-        "TARIFF": 0.0,
-        "MODIFIER": "",
-        "QTY": 1,
-        "CATEGORY": "",
-        "SUBCATEGORY": "",
-        "AMOUNT": 0.0
-    })
-
-    selected_rows = edited_df.to_dict("records")
-
-    total_amount = sum(r["AMOUNT"] for r in selected_rows)
-    st.metric("Grand Total", f"${total_amount:,.2f}")
-
     if st.button("Generate & Download Quotation"):
-        template_file = fetch_quote_template()
-        if template_file:
-            out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows, date_value=quotation_date
-            )
-            st.download_button(
-                "Download Quotation",
-                data=out,
-                file_name="quotation.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        out = fill_excel_template(
+            fetch_quote_template(),
+            patient,
+            member,
+            provider,
+            edit_df.to_dict("records"),
+            quotation_date
+        )
+        st.download_button(
+            "Download Quotation",
+            data=out,
+            file_name="quotation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
