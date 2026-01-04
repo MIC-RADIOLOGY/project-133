@@ -156,7 +156,7 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-def fill_excel_template(template_file, patient, member, provider, scan_rows):
+def fill_excel_template(template_file, patient, member, provider, scan_rows, date_value=None):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -167,8 +167,8 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows):
         append_after_label(ws, *pos["member_cell"], member)
     if "provider_cell" in pos:
         append_after_label(ws, *pos["provider_cell"], provider)
-    if "date_cell" in pos:
-        write_below_label(ws, *pos["date_cell"], datetime.today().strftime("%d/%m/%Y"))
+    if "date_cell" in pos and date_value:
+        write_below_label(ws, *pos["date_cell"], date_value.strftime("%d/%m/%Y"))
 
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
@@ -244,6 +244,9 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
+# NEW: Date input
+quotation_date = st.date_input("Quotation Date", value=datetime.today())
+
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
     st.success("Charge sheet loaded automatically!")
@@ -308,7 +311,7 @@ if selected_rows:
         template_file = fetch_quote_template()
         if template_file:
             out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows
+                template_file, patient, member, provider, selected_rows, date_value=quotation_date
             )
             st.download_button(
                 "Download Quotation",
