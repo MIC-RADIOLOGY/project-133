@@ -244,7 +244,7 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# NEW: Date input
+# Date input
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
 if "df" not in st.session_state:
@@ -282,12 +282,31 @@ if selected_rows:
     edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
+
+    # Add custom scan button
+    if st.button("Add Custom Scan"):
+        edits_df = pd.concat([
+            edits_df,
+            pd.DataFrame([{
+                "SCAN": "",
+                "MODIFIER": "",
+                "TARIFF": 0.0,
+                "QTY": 1,
+                "AMOUNT": 0.0,
+                "IS_MAIN_SCAN": True,
+                "CATEGORY": "",
+                "SUBCATEGORY": ""
+            }])
+        ], ignore_index=True)
+
     edited_df = st.data_editor(
         edits_df,
         column_config={
             "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
+            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=10),  # Editable
+            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),   # Editable
+            "QTY": st.column_config.NumberColumn("Qty", min_value=1, step=1),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
         },
         use_container_width=True
     )
@@ -311,11 +330,16 @@ if selected_rows:
         template_file = fetch_quote_template()
         if template_file:
             out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows, date_value=quotation_date
+                template_file,
+                patient,
+                member,
+                provider,
+                selected_rows,
+                date_value=quotation_date
             )
             st.download_button(
                 "Download Quotation",
                 data=out,
-                file_name="quotation.xlsx",
+                file_name=f"Quotation_{patient.replace(' ', '_')}_{quotation_date.strftime('%d%m%Y')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
