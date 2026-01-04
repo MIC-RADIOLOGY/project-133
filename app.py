@@ -17,10 +17,11 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     st.title("Login Required")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
     if st.button("Login"):
-        if u == "admin" and p == "Jamela2003":
+        if username == "admin" and password == "Jamela2003":
             st.session_state.logged_in = True
             st.rerun()
         else:
@@ -32,28 +33,29 @@ if not st.session_state.logged_in:
 # ============================================================
 ERROR_FONT = Font(color="FF0000", bold=True)
 
-def safe_int(x, d=1):
+def safe_int(x, default=1):
     try:
         return int(float(x))
     except:
-        return d
+        return default
 
-def safe_float(x, d=0.0):
+def safe_float(x, default=0.0):
     try:
         return float(x)
     except:
-        return d
+        return default
 
 def normalize_text(x):
     if x is None or pd.isna(x):
         return ""
     return str(x).strip()
 
-def validate_row(sr):
+def validate_row(row):
     errors = []
-    desc = normalize_text(sr.get("SCAN"))
-    qty = sr.get("QTY", 1)
-    tariff = sr.get("TARIFF", 0)
+
+    desc = normalize_text(row.get("SCAN"))
+    qty = row.get("QTY")
+    tariff = row.get("TARIFF")
 
     if not desc:
         errors.append("Missing description")
@@ -73,7 +75,7 @@ def validate_row(sr):
     return errors
 
 # ============================================================
-# LOAD DATA
+# LOAD CHARGE SHEET
 # ============================================================
 @st.cache_data(show_spinner=False)
 def fetch_charge_sheet():
@@ -82,14 +84,17 @@ def fetch_charge_sheet():
         "2PACX-1vTmaRisOdFHXmFsxVA7Fx0odUq1t2QfjMvRBKqeQPgoJUdrIgSU6UhNs_-dk4jfVQ"
         "/pub?output=xlsx"
     )
+
     df = pd.read_excel(url, header=None)
-    df = df.iloc[:, :4]
-    df.columns = ["SCAN", "TARIFF", "QTY", "AMOUNT"]
+    df = df.iloc[:, :3]
+    df.columns = ["SCAN", "TARIFF", "QTY"]
+
     df = df.dropna(subset=["SCAN"])
-    df["QTY"] = df["QTY"].fillna(1)
     df["TARIFF"] = df["TARIFF"].fillna(0)
+    df["QTY"] = df["QTY"].fillna(1)
     df["AMOUNT"] = df["TARIFF"] * df["QTY"]
     df["IS_MAIN_SCAN"] = True
+
     return df.reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
@@ -100,7 +105,7 @@ def fetch_template():
     return io.BytesIO(r.content)
 
 # ============================================================
-# EXCEL EXPORT
+# EXCEL EXPORT (CRASH-PROOF)
 # ============================================================
 def fill_excel_template(template_file, rows, patient, member, provider, qdate):
     wb = openpyxl.load_workbook(template_file)
@@ -114,16 +119,16 @@ def fill_excel_template(template_file, rows, patient, member, provider, qdate):
     rowptr = 22
     grand_total = 0.0
 
-    for sr in rows:
-        errors = validate_row(sr)
+    for row in rows:
+        errors = validate_row(row)
 
-        scan_desc = normalize_text(sr.get("SCAN"))
-        is_main = bool(sr.get("IS_MAIN_SCAN", True))
-        qty = safe_int(sr.get("QTY"), 1)
-        tariff = safe_float(sr.get("TARIFF"), 0.0)
+        scan_desc = normalize_text(row.get("SCAN"))
+        is_main = bool(row.get("IS_MAIN_SCAN", True))
+        qty = safe_int(row.get("QTY"), 1)
+        tariff = safe_float(row.get("TARIFF"), 0.0)
         amount = round(qty * tariff, 2)
 
-        # ---- INVALID ROW HANDLING ----
+        # ---- INVALID ROW → RED WARNING, NO CRASH ----
         if errors:
             cell = ws.cell(row=rowptr, column=1)
             cell.value = f"⚠ INVALID ROW: {', '.join(errors)}"
@@ -134,6 +139,7 @@ def fill_excel_template(template_file, rows, patient, member, provider, qdate):
         if not scan_desc:
             scan_desc = "UNNAMED SCAN"
 
+        # ---- SAFE INDENT (NO STRING CONCAT WITH NON-STRING) ----
         final_desc = scan_desc if is_main else f"   {scan_desc}"
 
         ws.cell(row=rowptr, column=1).value = final_desc
@@ -179,6 +185,7 @@ selected = st.multiselect(
 if selected and st.session_state.edit_df.empty:
     st.session_state.edit_df = df.loc[selected].copy().reset_index(drop=True)
 
+# Add custom line
 if st.button("➕ Add Custom Line Item"):
     st.session_state.edit_df = pd.concat(
         [
@@ -194,8 +201,9 @@ if st.button("➕ Add Custom Line Item"):
         ignore_index=True
     )
 
+# Editor
 if not st.session_state.edit_df.empty:
-    st.subheader("Edit Final Quotation (What Prints to Excel)")
+    st.subheader("Edit Final Quotation (Printed to Excel)")
 
     st.session_state.edit_df = st.data_editor(
         st.session_state.edit_df,
