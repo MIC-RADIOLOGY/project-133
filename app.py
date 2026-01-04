@@ -170,12 +170,17 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     if "date_cell" in pos and date_value:
         write_below_label(ws, *pos["date_cell"], date_value.strftime("%d/%m/%Y"))
 
+    description_col = pos["cols"].get("DESCRIPTION")
+    if not description_col:
+        st.error("Could not find DESCRIPTION column in template. Check the header.")
+        return None
+
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
     for sr in scan_rows:
         is_main = sr.get("IS_MAIN_SCAN", True)
-        scan_desc = sr.get("FINAL_SCAN") or sr.get("SCAN", "")  # Use final description if provided
+        scan_desc = sr.get("FINAL_SCAN") or sr.get("SCAN", "")
         tariff = sr.get("TARIFF", 0.0)
         modifier = sr.get("MODIFIER", "")
         qty = sr.get("QTY", 1)
@@ -184,7 +189,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(
             ws,
             rowptr,
-            pos["cols"].get("DESCRIPTION"),
+            description_col,
             scan_desc if is_main else "   " + scan_desc
         )
         write_safe(
@@ -244,10 +249,8 @@ patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 
-# Date input
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
-# Load charge sheet
 if "df" not in st.session_state:
     st.session_state.df = fetch_charge_sheet()
     st.success("Charge sheet loaded automatically!")
@@ -256,17 +259,14 @@ df = st.session_state.df
 if df.empty:
     st.stop()
 
-# Select main category
 main_sel = st.selectbox(
     "Select Main Category",
     sorted(df["CATEGORY"].dropna().unique())
 )
 
-# Select subcategory
 subcats = sorted(df[df["CATEGORY"] == main_sel]["SUBCATEGORY"].dropna().unique())
 sub_sel = st.selectbox("Select Subcategory", subcats) if subcats else None
 
-# Filter scans
 scans = (
     df[(df["CATEGORY"] == main_sel) & (df["SUBCATEGORY"] == sub_sel)]
     if sub_sel else df[df["CATEGORY"] == main_sel]
@@ -285,7 +285,7 @@ selected_rows = [scans.iloc[i].to_dict() for i in selected]
 if selected_rows:
     edits_df = pd.DataFrame(selected_rows)
 
-    # Add column for final description
+    # Ensure FINAL_SCAN column exists
     if "FINAL_SCAN" not in edits_df.columns:
         edits_df["FINAL_SCAN"] = edits_df["SCAN"]
 
@@ -321,9 +321,10 @@ if selected_rows:
             out = fill_excel_template(
                 template_file, patient, member, provider, selected_rows, date_value=quotation_date
             )
-            st.download_button(
-                "Download Quotation",
-                data=out,
-                file_name="quotation.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            if out:
+                st.download_button(
+                    "Download Quotation",
+                    data=out,
+                    file_name="quotation.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
