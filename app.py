@@ -243,6 +243,8 @@ st.title("Medical Quotation Generator")
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
+
+# NEW: Date input
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
 if "df" not in st.session_state:
@@ -277,41 +279,20 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Initialize editable DF in session state
-    if "editable_df" not in st.session_state:
-        st.session_state.editable_df = pd.DataFrame(selected_rows)
+    edits_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
-
-    # Add custom scan row
-    if st.button("Add Custom Scan"):
-        new_row = pd.DataFrame([{
-            "SCAN": "",
-            "MODIFIER": "",
-            "TARIFF": 0.0,
-            "QTY": 1,
-            "AMOUNT": 0.0,
-            "IS_MAIN_SCAN": True,
-            "CATEGORY": "",
-            "SUBCATEGORY": ""
-        }])
-        st.session_state.editable_df = pd.concat([st.session_state.editable_df, new_row], ignore_index=True)
-
-    # Editable table
-    st.session_state.editable_df = st.data_editor(
-        st.session_state.editable_df,
+    edited_df = st.data_editor(
+        edits_df,
         column_config={
-            "SCAN": st.column_config.TextColumn("Description"),
-            "MODIFIER": st.column_config.TextColumn("Modifier"),
-            "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),
-            "QTY": st.column_config.NumberColumn("Qty", min_value=1, step=1),
-            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
+            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
+            "MODIFIER": st.column_config.TextColumn("Modifier", disabled=True),
+            "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f", disabled=True),
         },
         use_container_width=True
     )
 
-    # Fill missing values
-    st.session_state.editable_df = st.session_state.editable_df.fillna({
+    edited_df = edited_df.fillna({
         "IS_MAIN_SCAN": True,
         "TARIFF": 0.0,
         "MODIFIER": "",
@@ -321,28 +302,20 @@ if selected_rows:
         "AMOUNT": 0.0
     })
 
-    # Update selected_rows from session state
-    selected_rows = st.session_state.editable_df.to_dict("records")
+    selected_rows = edited_df.to_dict("records")
 
-    # Show grand total
-    total_amount = sum(r.get("AMOUNT", 0.0) for r in selected_rows)
+    total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
-    # Generate & Download
     if st.button("Generate & Download Quotation"):
         template_file = fetch_quote_template()
         if template_file:
             out = fill_excel_template(
-                template_file,
-                patient,
-                member,
-                provider,
-                selected_rows,
-                date_value=quotation_date
+                template_file, patient, member, provider, selected_rows, date_value=quotation_date
             )
             st.download_button(
                 "Download Quotation",
                 data=out,
-                file_name=f"Quotation_{patient.replace(' ', '_')}_{quotation_date.strftime('%d%m%Y')}.xlsx",
+                file_name="quotation.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
