@@ -156,7 +156,7 @@ def find_template_positions(ws):
                         pos["cols"][h] = cell.column
     return pos
 
-def fill_excel_template(template_file, patient, member, provider, scan_rows, date_value=None):
+def fill_excel_template(template_file, patient, member, provider, scan_rows, date_value=None, full_scan_name=""):
     wb = openpyxl.load_workbook(template_file)
     ws = wb.active
     pos = find_template_positions(ws)
@@ -178,6 +178,7 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
     rowptr = pos.get("table_start_row", 22)
     grand_total = 0.0
 
+    # Write selected scans
     for sr in scan_rows:
         is_main = sr.get("IS_MAIN_SCAN", True)
         scan_desc = sr.get("FINAL_SCAN") or sr.get("SCAN", "")
@@ -202,6 +203,15 @@ def fill_excel_template(template_file, patient, member, provider, scan_rows, dat
         write_safe(ws, rowptr, pos["cols"].get("QTY"), qty)
         write_safe(ws, rowptr, pos["cols"].get("FEES"), round(amount, 2))
         grand_total += amount
+        rowptr += 1
+
+    # Add full scan name as separate row if provided
+    if full_scan_name.strip():
+        write_safe(ws, rowptr, description_col, full_scan_name.strip())
+        write_safe(ws, rowptr, pos["cols"].get("TARIFF") or pos["cols"].get("TARRIF"), 0)
+        write_safe(ws, rowptr, pos["cols"].get("MOD"), "")
+        write_safe(ws, rowptr, pos["cols"].get("QTY"), 1)
+        write_safe(ws, rowptr, pos["cols"].get("FEES"), 0.0)
         rowptr += 1
 
     write_safe(ws, 22, pos["cols"].get("AMOUNT"), round(grand_total, 2))
@@ -250,11 +260,8 @@ member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
-# NEW: Final Quotation Name input
-final_quotation_name = st.text_input(
-    "Final Quotation Name / Scan Description",
-    value=""
-)
+# Full scan name input
+full_scan_name = st.text_input("Full Scan Name for Details List", value="")
 
 # Load charge sheet
 if "df" not in st.session_state:
@@ -291,7 +298,6 @@ selected_rows = [scans.iloc[i].to_dict() for i in selected]
 if selected_rows:
     edits_df = pd.DataFrame(selected_rows)
 
-    # Ensure FINAL_SCAN column exists
     if "FINAL_SCAN" not in edits_df.columns:
         edits_df["FINAL_SCAN"] = edits_df["SCAN"]
 
@@ -318,11 +324,6 @@ if selected_rows:
 
     selected_rows = edited_df.to_dict("records")
 
-    # Apply final quotation name to all rows if provided
-    if final_quotation_name.strip():
-        for r in selected_rows:
-            r["FINAL_SCAN"] = final_quotation_name.strip()
-
     total_amount = sum(r["AMOUNT"] for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
@@ -330,7 +331,9 @@ if selected_rows:
         template_file = fetch_quote_template()
         if template_file:
             out = fill_excel_template(
-                template_file, patient, member, provider, selected_rows, date_value=quotation_date
+                template_file, patient, member, provider, selected_rows,
+                date_value=quotation_date,
+                full_scan_name=full_scan_name
             )
             if out:
                 st.download_button(
