@@ -265,10 +265,11 @@ st.title("Medical Quotation Generator")
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
-# Full scan name input
+# Full scan name input (moved above date)
 full_scan_name = st.text_input("Full Scan Name for Details List", value="")
+
+quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
 # Load charge sheet
 if "df" not in st.session_state:
