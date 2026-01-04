@@ -243,8 +243,6 @@ st.title("Medical Quotation Generator")
 patient = st.text_input("Patient Name")
 member = st.text_input("Medical Aid / Member Number")
 provider = st.text_input("Medical Aid Provider", value="CIMAS")
-
-# Date input
 quotation_date = st.date_input("Quotation Date", value=datetime.today())
 
 if "df" not in st.session_state:
@@ -279,13 +277,13 @@ selected = st.multiselect(
 selected_rows = [scans.iloc[i].to_dict() for i in selected]
 
 if selected_rows:
-    # Store editable DF in session state
+    # Initialize editable DF in session state
     if "editable_df" not in st.session_state:
         st.session_state.editable_df = pd.DataFrame(selected_rows)
 
     st.subheader("Edit and Preview Final Descriptions")
 
-    # Button to add custom scan
+    # Add custom scan row
     if st.button("Add Custom Scan"):
         new_row = pd.DataFrame([{
             "SCAN": "",
@@ -299,12 +297,12 @@ if selected_rows:
         }])
         st.session_state.editable_df = pd.concat([st.session_state.editable_df, new_row], ignore_index=True)
 
-    # Editable data editor
+    # Editable table
     st.session_state.editable_df = st.data_editor(
         st.session_state.editable_df,
         column_config={
-            "SCAN": st.column_config.TextColumn("Description", max_chars=100),
-            "MODIFIER": st.column_config.TextColumn("Modifier", max_chars=10),
+            "SCAN": st.column_config.TextColumn("Description"),
+            "MODIFIER": st.column_config.TextColumn("Modifier"),
             "TARIFF": st.column_config.NumberColumn("Tariff", format="$%.2f"),
             "QTY": st.column_config.NumberColumn("Qty", min_value=1, step=1),
             "AMOUNT": st.column_config.NumberColumn("Amount", format="$%.2f"),
@@ -323,10 +321,14 @@ if selected_rows:
         "AMOUNT": 0.0
     })
 
+    # Update selected_rows from session state
     selected_rows = st.session_state.editable_df.to_dict("records")
-    total_amount = sum(r["AMOUNT"] for r in selected_rows)
+
+    # Show grand total
+    total_amount = sum(r.get("AMOUNT", 0.0) for r in selected_rows)
     st.metric("Grand Total", f"${total_amount:,.2f}")
 
+    # Generate & Download
     if st.button("Generate & Download Quotation"):
         template_file = fetch_quote_template()
         if template_file:
